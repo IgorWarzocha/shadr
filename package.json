@@ -1,0 +1,25 @@
+{
+  "name": "phone-digest",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "node scripts/dev.js",
+    "service:install": "node scripts/install-service.js",
+    "pair": "node scripts/pair-phone.js",
+    "status": "node scripts/inbox-status.js",
+    "apk:serve": "node scripts/serve-apk.js",
+    "db:init": "wrangler d1 migrations apply inbox --local",
+    "test": "node --test test/*.test.js",
+    "check": "npm test && wrangler deploy --dry-run --env production --outdir .build"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "miniflare": "5.20261006.2-beta",
+    "wrangler": "4.150.0"
+  },
+  "dependencies": {
+    "jose": "6.2.12",
+    "qr": "0.7.2"
+  }
+}

@@ -1,0 +1,13 @@
+<resources>
+    <style name="Theme.PhoneInbox" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="colorPrimary">#365E48</item><item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#B9F1C9</item><item name="colorOnPrimaryContainer">#00210F</item>
+        <item name="colorSecondary">#516354</item><item name="colorOnSecondary">#FFFFFF</item>
+        <item name="colorSecondaryContainer">#D4E8D5</item><item name="colorOnSecondaryContainer">#102014</item>
+        <item name="colorSurface">#F7FBF4</item><item name="colorOnSurface">#191D19</item>
+        <item name="colorSurfaceVariant">#DEE5DA</item><item name="colorOnSurfaceVariant">#424940</item>
+        <item name="colorOutline">#72796F</item>
+        <item name="android:colorBackground">#F7FBF4</item>
+    </style>
+</resources>

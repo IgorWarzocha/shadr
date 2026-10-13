@@ -1,0 +1,20 @@
+{
+  "name": "phone-digest",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-07-30",
+  "workers_dev": false,
+  "preview_urls": false,
+  "d1_databases": [{"binding": "DB", "database_name": "inbox", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations"}],
+  "vars": {
+    "MODE": "local",
+    "LIVE_DISMISSALS": "false",
+    "NOISE_PACKAGES": "[]",
+    "PROTECTED_PACKAGES": "[]"
+  },
+  "env": {
+    "production": {
+      "vars": {"MODE": "cloud", "LIVE_DISMISSALS": "false", "NOISE_PACKAGES": "[]", "PROTECTED_PACKAGES": "[]"},
+      "d1_databases": [{"binding": "DB", "database_name": "inbox", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations"}]
+    }
+  }
+}

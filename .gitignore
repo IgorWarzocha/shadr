@@ -1,0 +1,13 @@
+node_modules/
+.pi/
+.wrangler/
+.build/
+.dev.vars*
+.local.env*
+.env*
+wrangler.private.jsonc
+*.export.json
+*.pairing.gif
+*.jks
+*.keystore
+*.p12

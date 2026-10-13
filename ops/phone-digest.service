@@ -1,0 +1,16 @@
+[Unit]
+Description=Phone notification inbox (tailnet, local D1)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@WORKING_DIR@
+ExecStart="@NODE@" "@PROJECT_DIR@/scripts/dev.js"
+Environment=WRANGLER_SEND_METRICS=false
+Environment=CI=true
+Restart=on-failure
+RestartSec=10
+UMask=0077
+
+[Install]
+WantedBy=default.target

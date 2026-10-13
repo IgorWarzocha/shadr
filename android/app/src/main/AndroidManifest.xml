@@ -1,0 +1,22 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <queries>
+        <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent>
+        <package android:name="com.google.android.gms" />
+        <package android:name="com.android.systemui" />
+        <package android:name="com.android.phone" />
+        <package android:name="com.android.server.telecom" />
+    </queries>
+    <application android:name=".DigestApp" android:label="Phone inbox" android:icon="@drawable/ic_inbox" android:allowBackup="false" android:fullBackupContent="false" android:dataExtractionRules="@xml/data_extraction_rules" android:usesCleartextTraffic="true" android:theme="@style/Theme.PhoneInbox">
+        <activity android:name=".SetupActivity" android:exported="true">
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+        </activity>
+        <activity android:name=".PairingScanActivity" android:exported="false" android:theme="@style/zxing_CaptureTheme" />
+        <service android:name=".ShadeListener" android:label="Phone inbox" android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" android:exported="true">
+            <intent-filter><action android:name="android.service.notification.NotificationListenerService" /></intent-filter>
+        </service>
+    </application>
+</manifest>
