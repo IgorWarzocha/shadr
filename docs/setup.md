@@ -142,7 +142,7 @@ Use the same private backend preparation, but do not enable Funnel. Set `INBOX_U
 
 Use `npm run service:install -- --mode always-on` for an always-on host, or `--mode pc` for a PC that starts at login. When the PC is off, the phone retries and later uploads its current shade. Notifications that arrive and disappear meanwhile are not recoverable. There is no offline journal.
 
-The installer supports Linux systemd user services, macOS LaunchAgents and Windows Scheduled Tasks. macOS and Windows require the user's logged-in session. Their startup definitions have automated checks, but installation has not been verified on those operating systems. Linux always-on operation while logged out needs administrator-approved lingering.
+The installer supports Linux systemd user services, macOS LaunchAgents and Windows Scheduled Tasks. macOS and Windows require the user's logged-in session. Installation has not been verified on those operating systems. Linux always-on operation while logged out needs administrator-approved lingering.
 
 ## Recovery and validation
 
@@ -158,6 +158,6 @@ Use these commands on the relay host. macOS commands use a shell. Windows comman
 
 These stop commands do not remove login startup. After macOS `bootout`, run the installer again to load the service before using `kickstart`. On Linux, inspect recent operational logs with `journalctl --user -u phone-digest.service -n 30`. Treat logs as private even though the relay does not intentionally log tokens or notification bodies.
 
-Run `npm run check` for relay tests and a deployment dry-run. Android build and device checks are in [Android development](android.md). [The API contract](api.md) describes the wire format.
+Run `npm run check` for real Worker and disposable-D1 checks, pairing-file privacy, the APK download boundary and a deployment dry-run. These checks do not prove a hosted Cloudflare or Funnel deployment. Android release and device checks are in [Android development](android.md). [The API contract](api.md) describes the wire format.
 
 Before publishing, inspect staged files and history for private data. Publish source, not an archive of this working directory. Never include tokens, D1 state, private endpoints, pairing images or signing keys. Rotate exposed credentials even after deleting a leaked file.

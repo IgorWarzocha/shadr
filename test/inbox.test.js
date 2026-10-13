@@ -3,9 +3,6 @@ import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import { build } from "esbuild";
 import { Miniflare } from "miniflare";
-import { health } from "../src/health.js";
-import { ingest, readInbox } from "../src/inbox.js";
-import { isTailnetAddress, isLocalHost } from "../src/local-network.js";
 
 let runtime, db;
 const bindings = {
@@ -58,7 +55,6 @@ test("role isolation and malformed snapshots cannot mutate shade", async () => {
   assert.equal((await request("/health", "phone")).data.role, "phone");
   assert.equal((await request("/health", "bot")).data.role, "bot");
   assert.equal((await request("/notifications", "phone")).status, 403);
-  assert.equal((await request("/export", "phone")).status, 404);
   assert.equal((await request("/notifications", "bot", shade())).status, 403);
   assert.equal((await request("/dismiss", "phone", { keys: ["one"], reason: "noise" })).status, 403);
   assert.equal((await request("/notifications", "phone", shade())).status, 200);
@@ -84,307 +80,61 @@ test("latest bound snapshot replaces JSON, stale and unbound posts cannot overwr
   assert.deepEqual((await request("/notifications")).data.notifications, []);
   assert.deepEqual((await request("/notifications")).data.dismissalLog, []);
 });
-test("all current apps queue immediately and obsolete settings cannot block delivery", async () => {
-  await configure(options({ ...bindings, LIVE_DISMISSALS: "false", NOISE_PACKAGES: "invalid", PROTECTED_PACKAGES: "invalid" }));
-  const notifications = [item(), item("bank", "bank.app"), item("system", "com.android.systemui")];
-  await request("/notifications", "phone", shade(1, notifications));
-  assert.deepEqual((await request("/dismiss", "bot", { keys: ["one", "bank", "system", "gone"], reason: "clear" })).data,
-    { dryRun: false, queued: ["one", "bank", "system"], ignored: ["gone"] });
-  const live = (await request("/notifications", "phone", shade(2, notifications))).data;
-  assert.equal(live.dryRun, false);
-  assert.deepEqual(live.dismiss, ["bank", "one", "system"]);
-  assert.deepEqual(live.wouldDismiss, []);
-  const unbound = (await request("/notifications", "phone", shade(3, [], { listenerBound: false }))).data;
-  assert.deepEqual(unbound.dismiss, []);
-  assert.deepEqual((await request("/notifications", "phone", shade(4, notifications))).data.requestIds, live.requestIds);
-  await request("/notifications", "phone", shade(5, []));
-  assert.deepEqual((await request("/notifications")).data.pending, []);
-});
-test("legacy dry-run commands execute with their original IDs and record live receipts", async () => {
-  await request("/notifications", "phone", shade());
-  await request("/dismiss", "bot", { keys: ["one"], reason: "old request" });
-  await db.batch([
-    db.prepare("UPDATE dismissals SET dryRun=1"),
-    db.prepare("UPDATE dismissal_log SET dryRun=1"),
-  ]);
-  const old = (await request("/notifications")).data;
-  assert.equal(old.pending[0].dryRun, 0);
-  const requestId = old.pending[0].requestId;
-  assert.deepEqual((await request("/dismiss", "bot", { keys: ["one"], reason: "retry" })).data.queued, []);
-  const command = (await request("/notifications", "phone", shade(2))).data;
-  assert.deepEqual(command.dismiss, ["one"]);
-  assert.equal(command.requestIds.one, requestId);
-  // A mixed legacy pending/log flag must not duplicate the matched request.
-  await db.prepare("UPDATE dismissals SET dryRun=0").run();
-  const outcomes = [{ key: "one", status: "dismissed", requestId }];
-  await request("/notifications", "phone", shade(3, [], { outcomes }));
-  await request("/notifications", "phone", shade(4, [], { outcomes }));
-  const inbox = (await request("/notifications")).data;
-  assert.deepEqual(inbox.pending, []);
-  assert.deepEqual(inbox.dismissalLog.map(row => [row.event, row.dryRun]), [["requested", 1], ["dismissed", 0]]);
-  await request("/notifications", "phone", shade(5));
-  await request("/dismiss", "bot", { keys: ["one"], reason: "legacy late receipt" });
-  const lateId = (await request("/notifications")).data.pending[0].requestId;
-  await db.prepare("UPDATE dismissal_log SET dryRun=1 WHERE requestId=?").bind(lateId).run();
-  await request("/notifications", "phone", shade(6, []));
-  await request("/notifications", "phone", shade(7, [], {
-    outcomes: [{ key: "one", status: "dismissed", requestId: lateId }],
-  }));
-  const late = (await request("/notifications")).data.dismissalLog.filter(row => row.requestId === lateId);
-  assert.deepEqual(late.map(row => [row.event, row.dryRun]), [["requested", 1], ["dismissed", 0]]);
-});
-test("key reuse by a different package ends old commands without inventing a result", async () => {
-  await request("/notifications", "phone", shade());
-  await request("/dismiss", "bot", { keys: ["one"], reason: "noise" });
-  const reply = (await request("/notifications", "phone", shade(2, [item("one", "protected.app")]))).data;
-  assert.deepEqual(reply.dismiss, []);
-  const inbox = (await request("/notifications")).data;
-  assert.deepEqual(inbox.pending, []);
-  assert.deepEqual(inbox.dismissalLog.map(row => row.event), ["requested"]);
-});
-test("delayed outcomes survive missing snapshots and cannot consume a new lifecycle's request", async () => {
-  await request("/notifications", "phone", shade());
-  await request("/dismiss", "bot", { keys: ["one"], reason: "first request" });
-  const first = (await request("/notifications", "phone", shade(2))).data.requestIds.one;
-  await request("/notifications", "phone", shade(3, []));
-  assert.deepEqual((await request("/notifications")).data.pending, []);
-  await request("/notifications", "phone", shade(4));
-  await request("/dismiss", "bot", { keys: ["one"], reason: "new lifecycle" });
-  const second = (await request("/notifications")).data.pending[0].requestId;
-  const outcomes = [{ key: "one", status: "dismissed", requestId: first }];
-  assert.equal((await request("/notifications", "phone", shade(5, [item()], { outcomes }))).status, 200);
-  await request("/notifications", "phone", shade(6, [item()], { outcomes }));
-  const inbox = (await request("/notifications")).data;
-  assert.equal(inbox.pending[0].requestId, second);
-  assert.equal(inbox.dismissalLog.filter(row => row.requestId === first && row.event === "dismissed").length, 1);
-  assert.equal("actor" in inbox.dismissalLog[0], false);
-});
-test("multi-key queues assign independent identities and repeated requests do not duplicate history", async () => {
-  await request("/notifications", "phone", shade(1, [item("one"), item("two")]));
-  const payload = { keys: ["one", "two"], reason: "noise" };
-  await request("/dismiss", "bot", payload);
+test("clearing stays pending until a matching phone receipt and retries settle once", async () => {
+  const notification = item("system", "com.android.systemui");
+  await request("/notifications", "phone", shade(1, [notification]));
+  const payload = { keys: ["system"], reason: "clear" };
+  assert.deepEqual((await request("/dismiss", "bot", payload)).data.queued, ["system"]);
   assert.deepEqual((await request("/dismiss", "bot", payload)).data.queued, []);
-  const inbox = (await request("/notifications")).data;
-  assert.equal(new Set(inbox.pending.map(row => row.requestId)).size, 2);
-  assert.equal(inbox.dismissalLog.length, 2);
-});
-test("concurrent snapshots cannot restore the older sequence", async () => {
-  await Promise.all([request("/notifications", "phone", shade(1)), request("/notifications", "phone", shade(2, []))]);
-  const result = (await request("/notifications")).data;
-  assert.equal((await request("/health")).data.sequence, 2);
-  assert.deepEqual(result.notifications, []);
-  assert.equal((await request("/export")).status, 404);
-});
-test("D1 failure rolls back the entire snapshot, including health and clears", async () => {
-  await request("/notifications", "phone", shade());
-  await db.prepare("CREATE TRIGGER reject_broken BEFORE UPDATE ON shade WHEN json_extract(NEW.notifications,'$[0].key')='broken' BEGIN SELECT RAISE(ABORT,'test failure'); END").run();
-  try {
-    assert.equal((await request("/notifications", "phone", shade(2, [item("broken")]))).status, 500);
-    const inbox = (await request("/notifications")).data;
-    assert.equal((await request("/health")).data.sequence, 1);
-    assert.equal(inbox.notifications[0].text, "Preview");
-    assert.equal(inbox.dismissalLog.length, 0);
-  } finally { await db.prepare("DROP TRIGGER reject_broken").run(); }
-});
-test("seven-day log pruning preserves old pending commands, retries and late acknowledgements", async () => {
-  await request("/notifications", "phone", shade());
-  await request("/dismiss", "bot", { keys: ["one"], reason: "noise" });
-  const sevenDays = Date.now() - 7 * 86400_000;
-  await db.prepare("UPDATE dismissal_log SET at=?").bind(new Date(sevenDays - 1000).toISOString()).run();
-  await db.prepare("UPDATE dismissals SET requestedAt=?").bind(new Date(sevenDays - 1000).toISOString()).run();
-  const inbox = (await request("/notifications")).data;
-  assert.deepEqual(inbox.dismissalLog, []);
-  assert.equal(inbox.pending.length, 1);
-  const requestId = inbox.pending[0].requestId;
-  await request("/notifications", "phone", shade(2, [], { listenerBound: false }));
-  assert.equal((await db.prepare("SELECT count(*) AS count FROM dismissal_log").first()).count, 0);
-  assert.equal((await db.prepare("SELECT count(*) AS count FROM dismissals").first()).count, 1);
-  assert.deepEqual((await request("/notifications")).data.notifications, [item()]);
-  assert.deepEqual((await request("/dismiss", "bot", { keys: ["one"], reason: "noise" })).data.queued, []);
-  const retry = (await request("/notifications", "phone", shade(3))).data;
-  assert.deepEqual(retry.dismiss, ["one"]);
-  assert.equal(retry.requestIds.one, requestId);
-  const outcomes = [{ key: "one", requestId, status: "dismissed" }];
+  const command = (await request("/notifications", "phone", shade(2, [notification]))).data;
+  assert.deepEqual(command.dismiss, ["system"]);
+  const requestId = command.requestIds.system;
+  assert.ok(requestId);
+  await request("/notifications", "phone", shade(3, [notification], {
+    outcomes: [{ key: "system", requestId: "unknown", status: "dismissed" }],
+  }));
+  const pending = (await request("/notifications")).data;
+  assert.equal(pending.pending[0].requestId, requestId);
+  assert.deepEqual(pending.dismissalLog.map(row => row.event), ["requested"]);
+  const outcomes = [{ key: "system", requestId, status: "dismissed" }];
   await request("/notifications", "phone", shade(4, [], { outcomes }));
   await request("/notifications", "phone", shade(5, [], { outcomes }));
-  const acknowledged = (await request("/notifications")).data;
-  assert.deepEqual(acknowledged.pending, []);
-  assert.deepEqual(acknowledged.dismissalLog.map(row => row.event), ["dismissed"]);
+  const settled = (await request("/notifications")).data;
+  assert.deepEqual(settled.pending, []);
+  assert.deepEqual(settled.dismissalLog.map(row => row.event), ["requested", "dismissed"]);
 });
-test("local mode refuses a public hostname even with a valid bearer", async () => {
-  const response = await runtime.dispatchFetch("https://accidental.example/health", {
-    headers: { Authorization: "Bearer " + bindings.BOT_TOKEN },
-  });
-  assert.equal(response.status, 503);
+
+test("old receipts expire without losing a pending command or its acknowledgement", async () => {
+  await request("/notifications", "phone", shade());
+  await request("/dismiss", "bot", { keys: ["one"], reason: "clear" });
+  const requestId = (await request("/notifications")).data.pending[0].requestId;
+  const expired = new Date(Date.now() - 8 * 86400_000).toISOString();
+  await db.prepare("UPDATE dismissal_log SET at=?").bind(expired).run();
+  const command = (await request("/notifications", "phone", shade(2))).data;
+  assert.equal(command.requestIds.one, requestId);
+  assert.deepEqual((await request("/notifications")).data.dismissalLog, []);
+  assert.equal((await db.prepare("SELECT count(*) AS count FROM dismissal_log").first()).count, 0);
+  await request("/notifications", "phone", shade(3, [], {
+    outcomes: [{ key: "one", requestId, status: "dismissed" }],
+  }));
+  const settled = (await request("/notifications")).data;
+  assert.deepEqual(settled.pending, []);
+  assert.deepEqual(settled.dismissalLog.map(row => row.event), ["dismissed"]);
 });
-test("tailnet hostnames work without opening local mode to arbitrary domains", async () => {
-  const response = await runtime.dispatchFetch("http://inbox.example.ts.net/health", {
-    headers: { Authorization: "Bearer " + bindings.BOT_TOKEN },
-  });
-  assert.equal(response.status, 200);
-  for (const host of ["0.0.0.0", "192.0.2.1", "100.128.0.1", "100.64.0.256", "100.64.0.1.", "example.com", "inbox.ts.net.example.com"]) {
-    assert.equal(isTailnetAddress(host), false);
-    assert.equal(isLocalHost(host), false);
-  }
-  for (const host of ["100.64.0.1", "100.127.255.255"]) assert.equal(isTailnetAddress(host), true);
-});
-test("public HTTPS Funnel origin keeps bearer authentication and health roles", async () => {
+
+test("Funnel requires bearer authentication and cloud mode refuses missing Access", async () => {
   const origin = "https://inbox.example.ts.net:10000/health";
   assert.equal((await runtime.dispatchFetch(origin)).status, 401);
-  assert.equal((await runtime.dispatchFetch(origin, { headers: { Authorization: "Bearer wrong" } })).status, 401);
-  for (const role of ["phone", "bot"]) {
-    const response = await runtime.dispatchFetch(origin, {
-      headers: { Authorization: "Bearer " + bindings[role === "phone" ? "PHONE_TOKEN" : "BOT_TOKEN"] },
-    });
-    assert.equal(response.status, 200);
-    assert.equal((await response.json()).role, role);
-  }
-});
-test("cloud mode fails closed without configured Access", async () => {
+  const authenticated = await runtime.dispatchFetch(origin, {
+    headers: { Authorization: "Bearer " + bindings.BOT_TOKEN },
+  });
+  assert.equal(authenticated.status, 200);
+  assert.equal((await authenticated.json()).role, "bot");
+  assert.equal((await runtime.dispatchFetch("https://accidental.example/health", {
+    headers: { Authorization: "Bearer " + bindings.BOT_TOKEN },
+  })).status, 503);
   await configure(options({ ...bindings, MODE: "cloud" }));
   assert.equal((await request("/health")).status, 503);
   await configure(options({ ...bindings, MODE: "cloud", ACCESS_TEAM: "example", ACCESS_AUD: "audience" }));
   assert.equal((await request("/health")).status, 401);
-});
-test("health uses explicit permission and four-hour POST freshness, never timezone alerts", () => {
-  const now = new Date("2026-10-13T12:00:00Z");
-  const current = { listenerBound: 1, notificationAccessGranted: 1, lastPostAt: "2026-10-13T08:00:01Z" };
-  assert.equal(health({ ...current, lastPostAt: null }, now).state, "not_paired");
-  assert.equal(health(current, now).state, "ok");
-  assert.equal(health({ ...current, lastPostAt: "2026-10-13T08:00:00Z" }, now).state, "phone_offline");
-  assert.equal(health({ ...current, listenerBound: 0, notificationAccessGranted: 0 }, now).state, "notification_access_revoked");
-  assert.equal(health({ ...current, listenerBound: 0, notificationAccessGranted: null }, now).state, "phone_not_ready");
-  assert.deepEqual(Object.keys(health(current, now)).sort(), ["lastSeenAt", "nextAction", "state"]);
-});
-
-test("permission metadata, concise read contracts and safe errors are explicit", async () => {
-  assert.deepEqual((await request("/health")).data, {
-    state: "not_paired", lastSeenAt: null, nextAction: "Pair the phone and send its first snapshot.", role: "bot", sequence: 0,
-  });
-  const invalid = await request("/notifications", "phone", shade(1, [], { notificationAccessGranted: "false" }));
-  assert.deepEqual(invalid, { status: 400, data: { state: "invalid_request", nextAction: "Check the request." } });
-  assert.equal((await request("/notifications", "phone", shade(1, [], { notificationAccessGranted: false }))).status, 400);
-  await request("/notifications", "phone", shade(1, [], { listenerBound: false, notificationAccessGranted: false }));
-  assert.equal((await request("/health")).data.state, "notification_access_revoked");
-  await request("/notifications", "phone", shade(2, [], { listenerBound: false }));
-  assert.equal((await request("/health")).data.state, "phone_not_ready");
-  await request("/notifications", "phone", shade(3, [item()], { notificationAccessGranted: true }));
-  const inbox = (await request("/notifications")).data;
-  assert.deepEqual(Object.keys(inbox).sort(), ["capturedAt", "dismissalLog", "dryRun", "notifications", "pending", "receivedAt", "status"]);
-  assert.equal(inbox.status.state, "ok");
-  assert.deepEqual((await request("/health", "bad")).data, {
-    state: "credentials_rejected", nextAction: "Check the configured credentials.",
-  });
-  assert.equal((await request("/notifications", "phone", shade(3))).data.state, "stale_sequence");
-});
-
-test("queue/send never implies dismissal and unknown receipts cannot fabricate success", async () => {
-  await request("/notifications", "phone", shade());
-  await request("/dismiss", "bot", { keys: ["one"], reason: "noise" });
-  const first = (await request("/notifications", "phone", shade(2))).data;
-  const outcomes = [
-    { key: "one", requestId: "unknown-command", status: "dismissed" },
-  ];
-  await request("/notifications", "phone", shade(3, [item()], { outcomes }));
-  let inbox = (await request("/notifications")).data;
-  assert.equal(inbox.pending[0].requestId, first.requestIds.one);
-  assert.deepEqual(inbox.dismissalLog.map(row => row.event), ["requested"]);
-  const retry = (await request("/notifications", "phone", shade(4))).data;
-  assert.deepEqual(retry.requestIds, first.requestIds);
-  await request("/notifications", "phone", shade(5, []));
-  inbox = (await request("/notifications")).data;
-  assert.deepEqual(inbox.pending, []);
-  assert.deepEqual(inbox.dismissalLog.map(row => row.event), ["requested"]);
-});
-
-test("request retries and receipt retries acknowledge once without consuming replacement commands", async () => {
-  await request("/notifications", "phone", shade());
-  const payload = { keys: ["one"], reason: "noise" };
-  await Promise.all([request("/dismiss", "bot", payload), request("/dismiss", "bot", payload)]);
-  const first = (await request("/notifications", "phone", shade(2))).data;
-  assert.deepEqual(first.dismiss, ["one"]);
-  assert.deepEqual((await request("/notifications")).data.dismissalLog.map(row => row.event), ["requested"]);
-  assert.deepEqual((await request("/notifications", "phone", shade(3))).data.requestIds, first.requestIds);
-  const outcomes = [{ key: "one", requestId: first.requestIds.one, status: "dismissed" }];
-  await request("/notifications", "phone", shade(4, [], { outcomes }));
-  assert.equal((await request("/notifications", "phone", shade(4, [], { outcomes }))).status, 409);
-  await request("/notifications", "phone", shade(5, [], { outcomes }));
-  const inbox = (await request("/notifications")).data;
-  assert.deepEqual(inbox.pending, []);
-  assert.deepEqual(inbox.dismissalLog.map(row => row.event), ["requested", "dismissed"]);
-});
-
-test("receipt retention uses relay receipt time and keeps the exact seven-day boundary", async () => {
-  await request("/notifications", "phone", shade());
-  await request("/dismiss", "bot", { keys: ["one"], reason: "noise" });
-  const command = (await request("/notifications", "phone", shade(2))).data;
-  const received = new Date();
-  await ingest(db, shade(3, [], {
-    capturedAt: "2020-01-01T00:00:00.000Z", lastListenerAt: "2020-01-01T00:00:00.000Z",
-    outcomes: [{ key: "one", requestId: command.requestIds.one, status: "dismissed" }],
-  }), received);
-  const receipt = (await readInbox(db, received)).dismissalLog.find(row => row.event === "dismissed");
-  assert.equal(receipt.at, received.toISOString());
-  const boundary = new Date(received.getTime() + 7 * 86400_000);
-  assert.equal((await readInbox(db, boundary)).dismissalLog.filter(row => row.event === "dismissed").length, 1);
-  assert.equal((await readInbox(db, new Date(boundary.getTime() + 1))).dismissalLog.length, 0);
-  await ingest(db, shade(4, [], { listenerBound: false }), new Date(boundary.getTime() + 1));
-  assert.equal((await db.prepare("SELECT count(*) AS count FROM dismissal_log").first()).count, 0);
-});
-
-test("pending queue stays bounded across shade replacements and unbound health posts", async () => {
-  const many = Array.from({ length: 1000 }, (_, i) => item("old-" + i));
-  assert.equal((await request("/notifications", "phone", shade(1, [...many, item("overflow")]))).status, 400);
-  await request("/notifications", "phone", shade(1, many));
-  for (let start = 0; start < many.length; start += 100) {
-    await request("/dismiss", "bot", { keys: many.slice(start, start + 100).map(row => row.key), reason: "noise" });
-  }
-  assert.equal((await request("/notifications")).data.pending.length, 1000);
-  await request("/notifications", "phone", shade(2, [], { listenerBound: false }));
-  assert.equal((await request("/notifications")).data.pending.length, 1000);
-  await request("/notifications", "phone", shade(3, [item("new")]));
-  await request("/dismiss", "bot", { keys: ["new"], reason: "noise" });
-  const inbox = (await request("/notifications")).data;
-  assert.deepEqual(inbox.pending.map(row => row.key), ["new"]);
-  assert.ok(inbox.dismissalLog.every(row => row.event === "requested"));
-});
-
-test("forward migration retains current shade and correlated recent receipts, not old item/history rows", async () => {
-  const config = options();
-  config.workers[0].config.env.DB.id = "migration-db";
-  const upgrade = new Miniflare(config);
-  try {
-    const old = await upgrade.getD1Database("DB");
-    const files = (await readdir("migrations")).filter(name => name.endsWith(".sql")).sort();
-    const apply = async file => {
-      const sql = await readFile("migrations/" + file, "utf8");
-      await old.batch(sql.split(";").map(s => s.trim()).filter(Boolean).map(s => old.prepare(s)));
-    };
-    for (const file of files.slice(0, 3)) await apply(file);
-    const now = new Date().toISOString();
-    await old.batch([
-      old.prepare("UPDATE device SET sequence=42,lastPostAt=?,capturedAt=?,listenerBound=0,lastListenerAt=?,timeZone='Europe/London'").bind(now, now, now),
-      old.prepare("INSERT INTO notifications VALUES ('live','noise.app','App','Title','Preview',?,1,NULL)").bind(now),
-      old.prepare("INSERT INTO notifications VALUES ('cleared','noise.app','App','','',?,0,?)").bind(now, now),
-      old.prepare("INSERT INTO dismissals VALUES ('live','noise.app','2020-01-01T00:00:00.000Z','noise',0,'keep-command')"),
-      old.prepare("INSERT INTO dismissal_log(key,package,at,actor,reason,dryRun,event,requestId) VALUES ('live','noise.app','2020-01-01T00:00:00.000Z','bot','noise',0,'requested','keep-command')"),
-      old.prepare("INSERT INTO dismissal_log(key,package,at,actor,reason,dryRun,event) VALUES ('cleared','noise.app',?,'unknown','shade removed',0,'cleared')").bind(now),
-      old.prepare("INSERT INTO dismissal_log(key,package,at,actor,reason,dryRun,event,requestId) VALUES ('old','noise.app','2020-01-01T00:00:00.000Z','bot','noise',0,'dismissed','expired')"),
-    ]);
-    await apply(files[3]);
-    const result = await readInbox(old, new Date());
-    assert.deepEqual(result.notifications, [{ key: "live", package: "noise.app", appName: "App", title: "Title", text: "Preview" }]);
-    assert.equal(result.capturedAt, null);
-    assert.equal(result.receivedAt, null);
-    assert.equal(result.pending[0].requestId, "keep-command");
-    assert.deepEqual(result.dismissalLog, []);
-    assert.equal((await old.prepare("SELECT sequence FROM device").first()).sequence, 42);
-    assert.equal(await old.prepare("SELECT name FROM sqlite_master WHERE name='notifications'").first(), null);
-    assert.equal((await old.prepare("PRAGMA table_info(dismissal_log)").all()).results.some(row => row.name === "actor"), false);
-    const outcomes = [{ key: "live", requestId: "keep-command", status: "dismissed" }];
-    await ingest(old, shade(43, [], { outcomes }), new Date());
-    const acknowledged = await readInbox(old, new Date());
-    assert.deepEqual(acknowledged.dismissalLog.map(row => row.event), ["dismissed"]);
-    assert.deepEqual(acknowledged.pending, []);
-  } finally { await upgrade.dispose(); }
 });

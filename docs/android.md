@@ -2,20 +2,17 @@
 
 The phone sends its current notifications to your inbox and lets bots clear them. Private message previews are included, except content identified as authentication codes. After pairing and notification access, sending and clearing work without an app-selection step or waiting period. Android may refuse to clear some ongoing notifications.
 
-## Build and install
+## Validate and build a release
 
 Requires Android SDK platform 35, build-tools 35.0.0 and Java 17 or newer. The checked-in wrapper pins Gradle 8.11.1 and verifies its published SHA-256. The app supports Android 8 and newer. Dependency versions are pinned in the Gradle files.
 
 ```sh
 export ANDROID_HOME=/path/to/android-sdk
 cd android
-./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+./gradlew :app:testReleaseUnitTest :app:lintRelease
 ```
 
-Use a signed release build for ordinary use. Debug builds are debuggable and unsuitable for storing long-lived production credentials.
-
-For debug upgrades, keep the original signing key and `ANDROID_USER_HOME`. Changing that directory can make Gradle generate a different debug key, which Android refuses as an update. The commissioning build in this checkout uses `ANDROID_USER_HOME="$PWD/.toolchain/android-home"` from the `android` directory. Do not uninstall the app to bypass a signing mismatch.
+Release is the normal build and the only variant with unit tests. The small boundary checks cover authentication-code omission, unsafe connection and QR inputs, and uncorrelated clearing commands. They do not prove that Android notification capture or cancellation works. Use the device flow below for that.
 
 ### Sign a release
 
@@ -41,6 +38,12 @@ Before distribution, verify the signature and confirm the manifest does not repo
 The production signing certificate's SHA-256 fingerprint is `7fdeda42c1bb13c2ad4dc0010e11a73da53ca6406b1a9dc86109314e319a638a`. This public fingerprint identifies the release key, not the changing APK file hash.
 
 Publish the verified signed APK as `phone-inbox.apk` on a GitHub Release tied to the tested source tag. Include its SHA-256 checksum and any upgrade instructions. Download the published asset and compare its checksum before handing out the link. Never publish the keystore, private signing environment, debug APK or unsigned APK. Losing the release key prevents future updates under the same signing identity.
+
+### Debug is only for emulator work
+
+Build `./gradlew :app:assembleDebug` only when you need the [emulator flow and screenshots](../screenshots/README.md). Debug permits screenshots and loopback HTTP for the disposable relay. Release deliberately blocks both. Do not run a second unit-test suite or build a debug APK as part of ordinary release validation.
+
+Debug builds are unsuitable for production credentials. Keep the original debug key and `ANDROID_USER_HOME` for emulator updates. This checkout uses `ANDROID_USER_HOME="$PWD/.toolchain/android-home"` from the `android` directory. Changing it can generate a different signing key. Do not uninstall a real phone app to bypass a signing mismatch.
 
 ## Connect your phone
 
@@ -111,8 +114,8 @@ Run the Gradle gate above, then test with fake notifications and a non-productio
 1. Post normal, expanded and conversation notifications. Compare the uploaded shade with the phone, including older notifications. Clear one manually and confirm it leaves the next successful snapshot.
 2. Send fake numeric and letter-based authentication codes from authenticator and chat apps. Verify their complete title and message content do not reach the inbox, while keys remain available for clearing. Send a short time and verify it remains readable.
 3. Generate notifications continuously for several minutes. Confirm posts continue rather than waiting for silence. Background the app and check heartbeat health, allowing for Android scheduling delays.
-4. Disconnect and reconnect Tailscale. Confirm the next successful flush contains the complete current shade. Revoke notification access and confirm inbox health reports an unbound listener without clearing the inbox.
+4. Disconnect and reconnect the phone's network. For private-tailnet hosting, also reconnect Tailscale. Confirm the next successful flush contains the complete current shade. Revoke notification access and confirm inbox health reports an unbound listener without clearing the inbox.
 5. Ask the server to clear ordinary, bank, authenticator and system notifications and a missing key. Verify all requested current keys are attempted without a package veto. Turn on **Pause bot clearing** and verify new clearing stops but sending continues; turn it off and verify pending clearing resumes.
 6. Interrupt connectivity after a cancellation and restart the process. Verify the acknowledgement is uploaded later. Force HTTP 409 and confirm the next request uses a larger sequence. Verify ongoing notifications are not falsely reported dismissed.
 
-Unit tests cover obsolete-gate migration, persistent pause, bounded event coalescing, safe durable sequences, failed preference commits, replayed and deferred acknowledgements, request-ID parsing, endpoint validation, setup transitions and authentication-content suppression. An instrumented WorkManager regression verifies that fresh sending runs while an older job is waiting for retry backoff, without advancing the timer. Run `./gradlew :app:connectedDebugAndroidTest` on a disposable emulator, then restart the app to restore its ordinary WorkManager instance. Real notification access, network callbacks and Android cancellation require the device checks above.
+The [emulator flow](../screenshots/README.md) automates pairing, real relay uploads, phone-confirmed clearing, pause persistence and code-content omission. Run it when changing those behaviours or the UI, not for every documentation or test edit. Background timing, physical camera scanning and manufacturer-specific settings still need a real device. Report the observed result, not a test count.
