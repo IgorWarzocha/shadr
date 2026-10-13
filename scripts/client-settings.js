@@ -43,8 +43,8 @@ export async function clientSettings({ role = "bot", endpoint, credentials = ".d
   if (!["phone", "bot"].includes(role)) throw new Error("Choose phone or bot credentials.");
   const local = await readSettings(resolve(directory, ".local.env"), { optional: true });
   const secrets = await readSettings(resolve(directory, credentials), { secret: true });
-  const url = serverAddress({ endpoint, local, environment });
-  const mode = hosting ?? environment.HOSTING_MODE ?? local.HOSTING_MODE ??
+  const url = serverAddress({ endpoint: endpoint ?? environment.INBOX_URL ?? secrets.INBOX_URL, local, environment });
+  const mode = hosting ?? environment.HOSTING_MODE ?? secrets.HOSTING_MODE ?? local.HOSTING_MODE ??
     (isLocalHost(new URL(url).hostname) ? "always-on" : "cloud");
   if (!["pc", "always-on", "cloud"].includes(mode)) throw new Error("Choose pc, always-on or cloud hosting.");
   const token = secrets[role === "phone" ? "PHONE_TOKEN" : "BOT_TOKEN"];

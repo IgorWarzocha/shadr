@@ -34,6 +34,8 @@ export function snapshot(value) {
   requireThat(Number.isSafeInteger(value.sequence) && value.sequence > 0, "Invalid sequence");
   requireThat(timestamp(value.capturedAt) && Date.parse(value.capturedAt) <= Date.now() + 300_000, "Invalid capturedAt");
   requireThat(typeof value.listenerBound === "boolean", "Invalid listenerBound");
+  requireThat(value.pushToken === undefined || value.pushToken === null ||
+    (string(value.pushToken, 4096) && /^[\x21-\x7e]+$/.test(value.pushToken)), "Invalid pushToken");
   requireThat(value.notificationAccessGranted === undefined || typeof value.notificationAccessGranted === "boolean", "Invalid notificationAccessGranted");
   requireThat(!value.listenerBound || value.notificationAccessGranted !== false, "Bound listener requires permission");
   requireThat(value.lastListenerAt === null || timestamp(value.lastListenerAt), "Invalid lastListenerAt");
@@ -54,11 +56,14 @@ export function snapshot(value) {
   const outcomes = new Set();
   for (const item of value.outcomes) {
     requireThat(item && string(item.key, 1024) && string(item.requestId, 128) &&
-      ["dismissed", "missing", "protected"].includes(item.status), "Invalid outcome");
+      ["applied", "failed", "not_found", "dismissed", "missing", "protected"].includes(item.status), "Invalid outcome");
     requireThat(!outcomes.has(item.requestId), "Duplicate outcome");
     outcomes.add(item.requestId);
   }
-  return { ...value, notifications: value.notifications.map(({ key, package: pkg, appName, title, text }) =>
+  const legacyResults = { dismissed: "applied", missing: "not_found", protected: "failed" };
+  return { ...value, outcomes: value.outcomes.map(({ key, requestId, status }) =>
+    ({ key, requestId, status: legacyResults[status] || status })),
+    notifications: value.notifications.map(({ key, package: pkg, appName, title, text }) =>
     ({ key, package: pkg, appName, title, text })) };
 }
 export function dismissal(value) {

@@ -11,7 +11,7 @@ if (hasReleaseSigning) {
 android {
     namespace = "dev.howaboua.phonedigest"
     compileSdk = 35
-    defaultConfig { applicationId = "dev.howaboua.phonedigest"; minSdk = 26; targetSdk = 35; versionCode = 6; versionName = "0.6" }
+    defaultConfig { applicationId = "dev.howaboua.phonedigest"; minSdk = 26; targetSdk = 35; versionCode = 7; versionName = "0.7" }
     buildFeatures { buildConfig = true }
     if (hasReleaseSigning) {
         signingConfigs {
@@ -33,6 +33,7 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.core:core:1.12.0")
     implementation("androidx.work:work-runtime-ktx:2.10.1")
+    implementation("com.google.firebase:firebase-messaging:25.0.2")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
 }

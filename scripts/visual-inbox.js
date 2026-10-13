@@ -1,15 +1,26 @@
 // The real relay with disposable D1 and fake credentials. Never reads .dev.vars,
-// .local.env or deployment state. This is development validation, not setup.
+// .local.env or deployment state. Optional --push-config imports only FCM bindings
+// for real push validation, never production bearer credentials or D1 state.
 import { createServer } from "node:http";
 import { readFile, readdir } from "node:fs/promises";
 import { build } from "esbuild";
 import { Miniflare } from "miniflare";
+import { parseArgs } from "node:util";
+import { readSettings } from "./client-settings.js";
+import { pushConfigured } from "../src/push.js";
+
+const { values } = parseArgs({ options: { "push-config": { type: "string" } } });
+const push = values["push-config"] ? await readSettings(values["push-config"], { secret: true }) : {};
+if (values["push-config"] && !pushConfigured(push)) throw new Error("Invalid Firebase configuration for push validation.");
+const pushBindings = Object.fromEntries(["FCM_ANDROID_CONFIG", "FCM_SERVICE_ACCOUNT"]
+  .filter(name => push[name]).map(name => [name, { type: "text", value: push[name] }]));
 
 const source = await build({ entryPoints: ["src/worker.js"], bundle: true, write: false, format: "esm", platform: "browser" });
 const runtime = new Miniflare({ workers: [{ config: {
   name: "inbox-capture", compatibilityDate: "2026-07-30",
   manifest: { mainModule: "worker.js", modules: { "worker.js": { type: "esm", contents: source.outputFiles[0].text } } },
   env: {
+    ...pushBindings,
     PHONE_TOKEN: { type: "text", value: "capture-only-phone-token" },
     BOT_TOKEN: { type: "text", value: "capture-only-bot-token" },
     MODE: { type: "text", value: "local" },
@@ -47,7 +58,7 @@ try {
     server.once("error", reject);
     server.listen(8799, "127.0.0.1", accept);
   });
-  console.log("Real relay on loopback port 8799 with disposable D1 and fake credentials only.");
+  console.log(`Real relay on loopback port 8799 with disposable D1 and fake bearer credentials. Firebase push ${values["push-config"] ? "enabled" : "not configured"}.`);
 } catch (error) {
   server?.close();
   await runtime.dispose();

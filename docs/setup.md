@@ -54,16 +54,20 @@ This leaves the private relay service running. An intentionally configured HTTPS
 
 Check the **public** URL, not the `100.x` backend, from a client outside the tailnet. A phone on mobile data with Tailscale off is a useful final check. Backend-only success is not a completed setup.
 
-On the bot machine, a private `.env.bot` contains `BOT_TOKEN` and, only for Cloudflare, its Access credentials. For a Funnel endpoint:
+Create the bot configuration on the setup host, using the public `INBOX_URL` saved above, then check it. For a Funnel endpoint:
 
 ```sh
-npm --silent run status -- --endpoint https://relay.example.ts.net:10000 \
-  --credentials .env.bot --hosting always-on
+node scripts/configure-bot.js --hosting always-on
+npm --silent run status -- --credentials ~/.config/phone-inbox/bot.env
 ```
 
-Replace the example with the exact URL used in the QR. For Cloudflare, use its public HTTPS origin and `--hosting cloud`. The output gives `state`, `lastSeenAt` and `nextAction` without printing credentials. A valid health response exits 0, even when the phone needs attention. Transport, authentication and setup failures exit 1. Before pairing, `not_paired` is expected. Also verify that unauthenticated requests fail and each bearer has the intended role on that same endpoint.
+The exporter creates an owner-only file containing the exact client origin, hosting mode, existing bot token and optional Access credentials. Values are bare and unquoted. It never exports the phone token or Firebase sender key. For Cloudflare use `--hosting cloud` and `--credentials` with the bot's Access configuration. An existing output requires deliberate `--replace`, not token rotation.
+
+Status reports `state`, `lastSeenAt` and `nextAction` without printing credentials. A valid health response exits 0, even when the phone needs attention. Transport, authentication and setup failures exit 1. Before pairing, `not_paired` is expected. Also verify that unauthenticated requests fail and each bearer has the intended role on that same endpoint.
 
 ### Install the phone app first
+
+Configure [Firebase push delivery](#firebase-push-delivery) before pairing. The same signed APK works with your Firebase project, without a per-project rebuild.
 
 Use a signed release APK for ordinary use. Download it from GitHub Releases when a release has been published. Otherwise your setup agent can supply it as a mobile chat attachment or a temporary HTTPS download. Grok desktop chat cannot deliver a downloadable attachment. If no signed APK is available, follow [Android build instructions](android.md).
 
@@ -113,13 +117,52 @@ In Phone inbox, choose **Scan QR** or **Import QR image**. The app checks the co
 
 For Cloudflare, use `--endpoint` with your public HTTPS origin and `--credentials` with a private file containing `PHONE_TOKEN`, `ACCESS_CLIENT_ID` and `ACCESS_CLIENT_SECRET`. The QR carries the extra credentials, so there are no Access fields to fill in on the phone. Funnel needs no Access credentials. Never pass secret values as command arguments.
 
-After connecting, allow **Phone inbox** in Android notification access settings. Return to the app and use **Send now**. Compare a harmless notification with the bot's read of the shade. The app follows your system theme.
+After connecting, allow Phone inbox to show notifications and enable it in Android notification access settings. The app shows a quiet status notification while processing a command. Return to the app and use **Send now**. Compare a harmless notification with the bot's read of the shade. The app follows your system theme.
 
 ### Connect the bot
 
-Give the consumer only `BOT_TOKEN` and, for Cloudflare, its Access credentials through private configuration. Load [SKILL.md](../SKILL.md) and follow [consumer commissioning](consumer.md). Start on demand. A daily summary at your chosen time and an hourly hosting-aware health check are optional.
+Hand over `~/.config/phone-inbox/bot.env`, created during endpoint checks. Transfer this bot-only file privately if the consumer runs elsewhere and give it the absolute path on that machine. See [consumer commissioning](consumer.md) for permissions and verification. Setup is not complete merely because a document lists the variables the bot needs.
+
+Load [SKILL.md](../SKILL.md). The consumer can call ordinary HTTP with curl or its own HTTP client, without Node or this checkout. Start on demand. A daily summary at your chosen time and an hourly hosting-aware health check are optional.
 
 Clearing is enabled immediately. There is no observation week, app allowlist or extra protection switch to configure. **Pause bot clearing** stops clearing while snapshots continue to send. Android may refuse to clear an ongoing notification; the app must not report it cleared until it is actually gone. Test a harmless real dismissal through the same public endpoint used for pairing and verify the phone-confirmed receipt.
+
+Repeat that check with the app closed and the screen off. Do not use **Send now** to complete a background-delivery check. FCM acceptance is not proof that the phone woke or cleared anything.
+
+## Firebase push delivery
+
+Both hosting options use Firebase Cloud Messaging to wake the phone for bot commands. FCM itself is [no-cost on the Spark plan](https://firebase.google.com/docs/projects/billing/firebase-pricing-plans). No paid plan is needed for FCM alone. The phone needs Google Play services. No notification text or clearing keys go into the Google push payload, only a `type: sync` wake hint.
+
+Your setup bot should explain this before starting: it will use your Google account to create a free Firebase project, register the app and configure delivery. You may need to sign in or complete account verification. You will also install the APK and grant Android permissions. After you authorise setup, the bot handles the console and files through your existing signed-in browser. It should not hand you the following steps as chores or ask again for routine actions already authorised.
+
+This console path was executed successfully on 13 October 2026:
+
+1. Open the [Firebase console](https://console.firebase.google.com/). Choose **Get started by setting up a Firebase project**, or **Add project** for an existing account. Enter **Phone inbox** and retain an available project ID. Complete first-use Firebase terms as authorised by the user.
+2. Choose **Continue**. Turn off **Enable Gemini in Firebase**, then continue and turn off **Enable Google Analytics for this project**. Choose **Create project**, wait for the ready screen and continue. Verify **Spark · No cost ($0/month)**. Do not attach a billing account.
+3. On the project overview, choose **Add app**, then **Create an Android app**. Enter package **`dev.howaboua.phonedigest`** and nickname **Phone inbox**. Choose **Register app**, then **Download google-services.json**. No signing fingerprint was needed. Skip the generic wizard's Gradle and Analytics changes: the published APK reads runtime configuration and does not need rebuilding.
+4. Open **Project settings > Cloud Messaging**. Verify **Firebase Cloud Messaging API (V1) Enabled**. It was enabled automatically in the verified setup. If disabled, enable **Firebase Cloud Messaging API**, service `fcm.googleapis.com`, in the selected project. Leave the legacy API disabled. Android delivery needs no Web Push certificate.
+5. Open Google Cloud Console, select the same project, then **IAM & Admin > Service accounts > Create service account**. Name it **Phone inbox FCM sender**, with ID **phone-inbox-fcm-sender**. Choose **Create and continue**.
+6. Under permissions, search for and select **Firebase Cloud Messaging API Admin**, role `roles/firebasecloudmessaging.admin`. Do not grant Editor, Owner or broad Firebase Admin. Continue, skip optional principals and choose **Done**.
+7. Open that service account, then **Keys > Add key > Create new key > JSON > Create**. Download the JSON key. Verify the account's role in the project's IAM page. This key belongs on the relay host, not in the consuming bot's configuration or the APK.
+8. Move both downloaded files into an owner-only directory. On Unix use mode 0700 for the directory and 0600 for files. On Windows use account-only ACLs. If the browser is on another machine, transfer just these files to the relay host through authenticated file transfer. Keep a private record of the project, actions and file locations, without printing credential contents.
+9. Import on the relay host:
+
+```sh
+node scripts/configure-push.js --android /private/google-services.json \
+  --account /private/service-account.json
+```
+
+The command checks the package and project, adds `FCM_ANDROID_CONFIG` and `FCM_SERVICE_ACCOUNT` to private `.dev.vars`, and preserves bearer credentials. It never prints the key. Existing FCM settings require deliberate `--replace`. Restart the self-hosted relay after importing.
+
+For Cloudflare, import to a separate private file with `--output .env.fcm`, then upload those two secrets:
+
+```sh
+npx wrangler secret bulk .env.fcm --env production --config wrangler.private.jsonc
+```
+
+Do not deploy until the human has authorised that deployment. Firebase credentials are separate from Cloudflare Access and inbox bearer tokens. Remove redundant downloaded key copies after securing the relay's configuration. Revoke a compromised key in Google IAM, not by rotating inbox bearer tokens.
+
+The phone obtains public Firebase client configuration from authenticated `/health`, registers with FCM and sends its registration token to the relay. The sender key stays on the relay. After changing Firebase projects, open Phone inbox and use **Send now** to fetch the new configuration and register again. Validate actual screen-off command delivery after setup. Missing configuration or a missing registration token is a setup failure, not a reason to fall back to polling.
 
 ## Cloudflare setup
 

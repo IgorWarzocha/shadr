@@ -1,7 +1,8 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { body, snapshot, dismissal, HttpError } from "./contract.js";
-import { device, ingest, queue, readInbox } from "./inbox.js";
+import { device, ingest, queue, readInbox, dismissalState } from "./inbox.js";
 import { health } from "./health.js";
+import { pushConfig, pushConfigured, sendPush } from "./push.js";
 import { isLocalHost } from "./local-network.js";
 
 let accessKeys;
@@ -39,6 +40,59 @@ async function authenticate(request, env) {
 function json(value, status = 200) {
   return Response.json(value, { status, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
 }
+async function dismiss(request, env, now) {
+  const params = new URL(request.url).searchParams;
+  const raw = params.get("wait") ?? "10";
+  if (params.getAll("wait").length > 1 || !/^\d+$/.test(raw) || Number(raw) > 10) {
+    throw new HttpError(400, "Invalid dismissal wait");
+  }
+  const deadline = Date.now() + Number(raw) * 1000;
+  const queued = await queue(env.DB, dismissal(await body(request)), now);
+  let state = await dismissalState(env.DB, queued.requestIds);
+  const delivery = state.pending.length
+    ? await sendPush(env, (await device(env.DB)).pushToken, request.signal)
+    : { state: "not_needed" };
+  state = await dismissalState(env.DB, queued.requestIds);
+  while (delivery.state === "sent" && state.pending.length && Date.now() < deadline && !request.signal.aborted) {
+    await new Promise(resolve => {
+      const finish = () => {
+        clearTimeout(timer);
+        request.signal.removeEventListener("abort", finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, Math.min(250, deadline - Date.now()));
+      request.signal.addEventListener("abort", finish, { once: true });
+      if (request.signal.aborted) finish();
+    });
+    if (!request.signal.aborted) state = await dismissalState(env.DB, queued.requestIds);
+  }
+  return { ...queued, ...state, delivery };
+}
+function inboxQuery(params) {
+  const invalid = () => { throw new HttpError(400, "Invalid inbox query"); };
+  for (const name of ["view", "key", "limit", "offset"]) {
+    if (params.getAll(name).length > 1) invalid();
+  }
+  const compact = params.has("view");
+  if (compact && params.get("view") !== "compact") invalid();
+  if (params.has("key")) {
+    const key = params.get("key");
+    if (compact || params.has("limit") || params.has("offset") || !key || key.length > 1024) invalid();
+    return { key };
+  }
+  if (!compact) {
+    if (params.has("limit") || params.has("offset")) invalid();
+    return {};
+  }
+  const page = (name, fallback, min, max) => {
+    if (!params.has(name)) return fallback;
+    const raw = params.get(name);
+    const value = Number(raw);
+    if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < min || value > max) invalid();
+    return value;
+  };
+  return { compact: true, limit: page("limit", 50, 1, 100), offset: page("offset", 0, 0, 1000) };
+}
 export default {
   async fetch(request, env) {
     try {
@@ -48,7 +102,8 @@ export default {
       const now = new Date();
       if (route === "GET /health") {
         const current = await device(env.DB);
-        return json({ ...health(current, now), role, sequence: current.sequence });
+        return json({ ...health(current, now, pushConfigured(env)), role, sequence: current.sequence,
+          ...(role === "phone" ? { pushConfig: pushConfig(env) } : {}) });
       }
       if (route === "POST /notifications") {
         if (role !== "phone") throw new HttpError(403, "Phone token required");
@@ -56,8 +111,8 @@ export default {
       }
       if (["GET /notifications", "POST /dismiss"].includes(route)) {
         if (role !== "bot") throw new HttpError(403, "Bot token required");
-        if (route === "POST /dismiss") return json(await queue(env.DB, dismissal(await body(request)), now));
-        const inbox = await readInbox(env.DB, now);
+        if (route === "POST /dismiss") return json(await dismiss(request, env, now));
+        const inbox = await readInbox(env.DB, now, inboxQuery(new URL(request.url).searchParams), pushConfigured(env));
         return json(inbox);
       }
       throw new HttpError(404, "Not found");

@@ -17,4 +17,11 @@ class PolicyTest {
             assertThrows(IllegalArgumentException::class.java) { Policy.validate(endpoint, "phone", "Europe/London") }
         }
     }
+    @Test fun cancellationOnlyFailsAfterItsConfirmationWindow() {
+        assertEquals(ClearingAction.WAIT, Policy.clearingAction(true, true, false, 100, 1))
+        assertEquals(ClearingAction.CANCEL, Policy.clearingAction(true, true, false, Policy.CLEAR_RETRY_MILLIS, 1))
+        assertEquals(ClearingAction.ACK_FAILED, Policy.clearingAction(true, true, false, Policy.CLEAR_CONFIRM_MILLIS, 2))
+        assertEquals(ClearingAction.ACK_APPLIED, Policy.clearingAction(false, true, true, 100, 1))
+        assertEquals(ClearingAction.ACK_NOT_FOUND, Policy.clearingAction(false, false, false, 0, 0))
+    }
 }

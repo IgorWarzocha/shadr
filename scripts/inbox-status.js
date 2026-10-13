@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { clientSettings } from "./client-settings.js";
 
-const phoneStates = new Set(["ok", "not_paired", "phone_offline", "notification_access_revoked", "phone_not_ready"]);
+const phoneStates = new Set(["ok", "phone_idle", "not_paired", "phone_offline", "notification_access_revoked", "phone_not_ready"]);
 
 function unreachable(hostingMode) {
   return { state: "relay_unreachable", lastSeenAt: null, nextAction: hostingMode === "pc"

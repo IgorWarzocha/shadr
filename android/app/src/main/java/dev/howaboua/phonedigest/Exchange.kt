@@ -11,9 +11,15 @@ import java.time.Instant
 import java.io.ByteArrayOutputStream
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import android.os.SystemClock
+import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 class Exchange(private val context: Context, private val store: Store, private val active: () -> Boolean = { true }) {
-    private data class Capture(val payload: ByteArray, val listener: ShadeListener?, val count: Int)
+    companion object {
+        private val deadlines = ScheduledThreadPoolExecutor(1).apply { removeOnCancelPolicy = true }
+    }
+    private data class Capture(val payload: ByteArray, val listener: ShadeListener?, val count: Int, val outcomes: JSONArray, val pushToken: String?)
     fun send(session: ConnectionSession = store.session()) {
         if (sendAttempt(session, recoverConflict = true)) sendAttempt(session, recoverConflict = false)
     }
@@ -26,27 +32,31 @@ class Exchange(private val context: Context, private val store: Store, private v
             val accessGranted = context.packageName in NotificationManagerCompat.getEnabledListenerPackages(context)
             val listener = if (accessGranted) ShadeListener.bound else null
             if (listener != null) resolvePending(listener)
-            val shade = listener?.activeNotifications?.toList() ?: emptyList()
+            val shade = listener?.activeNotifications?.filterNot { CommandNotice.isOperational(context, it) } ?: emptyList()
             val isBound = listener != null && ShadeListener.bound === listener
             check(shade.size <= 1000) { "Shade exceeds inbox limit" }
             if (isBound) store.lastListenerAt = Instant.now().toString()
             val lastListenerAt = store.lastListenerAt
+            val outcomes = store.outcomes()
+            val pushToken = if (BackgroundAccess.notificationsEnabled(context)) store.pushToken else null
             val body = Protocol.snapshotHealth(accessGranted, isBound, lastListenerAt, store.zone)
                 .put("sequence", store.reserveSequence()).put("capturedAt", Instant.now().toString())
                 .put("notifications", JSONArray(if (isBound) shade.map(::notification) else emptyList<JSONObject>()))
-                .put("outcomes", store.outcomes())
-            check(store.outcomes().length() <= 1000) { "Acknowledgements exceed inbox limit" }
+                .put("outcomes", outcomes)
+                .put("pushToken", pushToken ?: JSONObject.NULL)
+            check(outcomes.length() <= 1000) { "Acknowledgements exceed inbox limit" }
             val payload = body.toString().toByteArray(Charsets.UTF_8)
             check(payload.size <= 2_000_000) { "Shade exceeds inbox byte limit" }
-            Capture(payload, listener, shade.size)
+            Capture(payload, listener, shade.size, outcomes, pushToken)
         }
         val uri = URI(session.settings.endpoint.trimEnd('/') + "/notifications")
         val connection = uri.toURL().openConnection() as HttpURLConnection
+        val deadline = deadlines.schedule({ connection.disconnect() }, 20, TimeUnit.SECONDS)
         try {
             connection.requestMethod = "POST"
             connection.instanceFollowRedirects = false
-            connection.connectTimeout = 20_000
-            connection.readTimeout = 20_000
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 10_000
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/json")
             session.settings.authenticate(connection)
@@ -74,23 +84,33 @@ class Exchange(private val context: Context, private val store: Store, private v
             // but never loses it. Recovery rechecks the shade before any cancellation.
             val applied = store.ifCurrent(session) {
                 if (!active()) return@ifCurrent
-                val incoming = reply.dismiss
+                val settled = mutableSetOf<Pair<String, String>>()
+                for (receipts in listOf(capture.outcomes, store.outcomes())) {
+                    for (index in 0 until receipts.length()) {
+                        val receipt = receipts.getJSONObject(index)
+                        settled.add(receipt.getString("requestId") to receipt.getString("key"))
+                    }
+                }
+                val incoming = reply.dismiss.filterNot { it.requestId to it.key in settled }
                 store.pending = (store.pending + incoming).distinct()
-                store.clearOutcomes()
+                // Confirmation can finish while HTTP is in flight; clear only the sent receipts.
+                store.removeSentOutcomes(capture.outcomes)
                 store.posted(capture.count)
+                store.pushSent(capture.pushToken)
                 if (ShadeListener.bound === capture.listener && capture.listener != null) resolvePending(capture.listener)
             }
             if (!applied) Posting.schedule(context)
             return false
-        } finally { connection.disconnect() }
+        } finally { deadline.cancel(false); connection.disconnect() }
     }
 
     private fun recoverSequence(session: ConnectionSession) {
         val connection = URI(session.settings.endpoint.trimEnd('/') + "/health").toURL().openConnection() as HttpURLConnection
+        val deadline = deadlines.schedule({ connection.disconnect() }, 20, TimeUnit.SECONDS)
         try {
             connection.instanceFollowRedirects = false
-            connection.connectTimeout = 20_000
-            connection.readTimeout = 20_000
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 10_000
             session.settings.authenticate(connection)
             check(connection.responseCode == 200) { "Sequence recovery failed" }
             val text = connection.inputStream.bufferedReader().use { reader ->
@@ -107,35 +127,57 @@ class Exchange(private val context: Context, private val store: Store, private v
             val sequence = JSONObject(text).get("sequence")
             require(sequence is Number && sequence.toLong() in 0..Policy.MAX_SEQUENCE && sequence.toDouble() == sequence.toLong().toDouble()) { "Invalid server sequence" }
             store.ifCurrent(session) { store.raiseSequence(sequence.toLong()) }
-        } finally { connection.disconnect() }
+        } finally { deadline.cancel(false); connection.disconnect() }
+    }
+
+    fun confirmPending(session: ConnectionSession) = synchronized(Store.stateLock) {
+        if (!store.ifCurrent(session) {}) return@synchronized
+        if (!active() || !store.configured) return@synchronized
+        val listener = ShadeListener.bound
+        if (listener != null && context.packageName in NotificationManagerCompat.getEnabledListenerPackages(context)) resolvePending(listener)
     }
 
     private fun resolvePending(listener: ShadeListener) {
         val pending = store.pending
-        val remaining = pending.toMutableList()
         for (command in pending) {
             val key = command.key
             check(ShadeListener.bound === listener && context.packageName in NotificationManagerCompat.getEnabledListenerPackages(context)) { "Notification access unavailable" }
             check(active()) { "Send stopped" }
             val current = listener.activeNotifications.firstOrNull { it.key == key }
-            val status = when (Policy.clearingAction(current != null, command.identity in store.attempted, store.paused)) {
-                ClearingAction.ACK_DISMISSED -> "dismissed"
-                ClearingAction.ACK_MISSING -> "missing"
-                ClearingAction.WAIT -> continue
+            val now = SystemClock.elapsedRealtime()
+            val attempt = store.clearAttempt(command)?.takeIf { it.startedAt <= now }
+            val age = if (attempt == null) 0 else now - attempt.startedAt
+            val status = when (Policy.clearingAction(current != null, command.identity in store.attempted, store.paused, age, attempt?.tries ?: 0)) {
+                ClearingAction.ACK_APPLIED -> "applied"
+                ClearingAction.ACK_NOT_FOUND -> "not_found"
+                ClearingAction.ACK_FAILED -> "failed"
+                ClearingAction.WAIT -> {
+                    continue
+                }
                 ClearingAction.CANCEL -> {
-                    store.attempted = store.attempted + command.identity
+                    store.recordClearAttempt(command, now)
                     listener.cancelNotification(key)
                     // cancelNotification is asynchronous. Only acknowledge observed absence.
-                    if (listener.activeNotifications.any { it.key == key }) continue
-                    "dismissed"
+                    if (listener.activeNotifications.any { it.key == key }) {
+                        continue
+                    }
+                    "applied"
                 }
             }
             store.acknowledge(command, status)
-            remaining.remove(command)
-            store.pending = remaining
-            store.attempted = store.attempted - command.identity
         }
-        if (remaining.size < pending.size) Posting.schedule(context)
+        // Short command work owns the confirmation window; no timer or persistent service is needed.
+    }
+    fun finishPending(session: ConnectionSession) {
+        val deadline = SystemClock.elapsedRealtime() + Policy.CLEAR_CONFIRM_MILLIS + 250
+        while (active() && SystemClock.elapsedRealtime() < deadline) {
+            if (!store.ifCurrent(session) {}) return
+            confirmPending(session)
+            val waiting = synchronized(Store.stateLock) { store.pending.any { store.clearAttempt(it) != null } }
+            if (!waiting) return
+            Thread.sleep(250)
+        }
+        confirmPending(session)
     }
 
     private fun notification(sbn: StatusBarNotification): JSONObject {

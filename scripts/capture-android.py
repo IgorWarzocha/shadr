@@ -37,8 +37,12 @@ def adb(*arguments, binary=False):
 
 
 def hierarchy():
-    adb("shell", "uiautomator", "dump", "/sdcard/phone-inbox-ui.xml")
-    return ET.fromstring(adb("exec-out", "cat", "/sdcard/phone-inbox-ui.xml"))
+    for _ in range(3):
+        output = adb("shell", "uiautomator", "dump", "/sdcard/phone-inbox-ui.xml")
+        if "dumped" in output:
+            return ET.fromstring(adb("exec-out", "cat", "/sdcard/phone-inbox-ui.xml"))
+        time.sleep(0.5)
+    raise RuntimeError("Android could not capture a current UI hierarchy")
 
 
 def node(identifier, timeout=25):
@@ -48,7 +52,7 @@ def node(identifier, timeout=25):
         # Drawers/dialogs follow their partly obscured background in the hierarchy.
         for element in reversed(list(tree.iter("node"))):
             description = element.get("content-desc", "")
-            if element.get("resource-id") == APP + ":id/" + identifier or element.get("text") == identifier or description == identifier or description.startswith(identifier + ", "):
+            if element.get("resource-id") == APP + ":id/" + identifier or element.get("text", "").casefold() == identifier.casefold() or description == identifier or description.startswith(identifier + ", "):
                 return element
         time.sleep(0.2)
     raise RuntimeError("UI control not found: " + identifier)
@@ -91,11 +95,13 @@ def fresh_start(theme):
 
 
 def import_qr(filename):
+    # Repeated Android 15 picker visits can leave DocumentsUI permanently
+    # non-idle. Reset this emulator-only browser before opening each fixture.
+    adb("shell", "pm", "clear", "com.google.android.documentsui")
     tap("import_pairing")
     # Android 15 routes GetContent through Photo Picker before its file browser.
-    if any(element.get("package") == "com.android.providers.media.module" for element in hierarchy().iter("node")):
-        tap("More options")
-        tap("Browse…")
+    tap("More options")
+    tap("Browse…")
     tap("Show roots")
     tap("Downloads")
     tap(filename)
@@ -119,7 +125,7 @@ def relay(path="/notifications", data=None):
     request = urllib.request.Request("http://127.0.0.1:8799" + path,
         data=None if data is None else json.dumps(data).encode(),
         headers={"Authorization": "Bearer capture-only-bot-token", "Content-Type": "application/json"})
-    with urllib.request.urlopen(request, timeout=10) as response:
+    with urllib.request.urlopen(request, timeout=20) as response:
         return json.load(response)
 
 
@@ -134,8 +140,40 @@ def wait_shade(predicate, explanation, timeout=40):
 
 
 def receipt(request_id):
-    return wait_shade(lambda shade: any(entry["requestId"] == request_id and entry["event"] == "dismissed"
+    return wait_shade(lambda shade: any(entry["requestId"] == request_id and entry["result"] == "applied"
         for entry in shade["dismissalLog"]), "No phone-confirmed dismissal receipt arrived")
+
+
+def background_clear(doze):
+    tag = "fcm-doze" if doze else "fcm-screen-off"
+    count = 20 if doze else 1
+    for index in range(count):
+        adb("shell", "cmd", "notification", "post", "-t", "Harmless push check", tag + "-" + str(index), "Clear this test notification.")
+    shade = wait_shade(lambda value: sum(tag in item["key"] for item in value["notifications"]) == count, "Test notifications not uploaded")
+    keys = [item["key"] for item in shade["notifications"] if tag in item["key"]]
+    try:
+        adb("shell", "input", "keyevent", "KEYCODE_HOME")
+        adb("shell", "dumpsys", "battery", "unplug")
+        adb("shell", "input", "keyevent", "KEYCODE_SLEEP")
+        time.sleep(3)
+        if doze:
+            adb("shell", "dumpsys", "deviceidle", "force-idle")
+            if "IDLE" != adb("shell", "dumpsys", "deviceidle", "get", "deep").strip():
+                raise RuntimeError("Emulator did not enter forced Doze")
+        started = time.monotonic()
+        result = relay("/dismiss", {"keys": keys, "reason": "background push verification"})
+        if result["delivery"]["state"] != "sent":
+            raise RuntimeError("Real FCM push was not accepted: " + result["delivery"]["state"])
+        ids = set(result["requestIds"].values())
+        wait_shade(lambda value: ids <= {entry["requestId"] for entry in value["dismissalLog"] if entry["result"] == "applied"},
+                   "Batch did not receive all phone-confirmed applied results")
+        print(tag, count, "phone-confirmed applied in", round(time.monotonic() - started, 2), "seconds", flush=True)
+    finally:
+        adb("shell", "dumpsys", "deviceidle", "unforce")
+        adb("shell", "dumpsys", "battery", "reset")
+        adb("shell", "input", "keyevent", "KEYCODE_WAKEUP")
+        adb("shell", "wm", "dismiss-keyguard")
+        adb("shell", "am", "start", "-W", "-n", APP + "/.SetupActivity")
 
 
 # The same encoder as the CLI, with a debug-only loopback destination. The
@@ -199,6 +237,17 @@ for theme in (["light", "dark"] if args.theme == "both" else [args.theme]):
         raise RuntimeError("Allow did not open Android notification access settings")
     adb("shell", "input", "keyevent", "KEYCODE_BACK")
     adb("shell", "cmd", "notification", "allow_listener", APP + "/.ShadeListener")
+    node("allow_service_notifications")
+    # Before granting permission, a registered token must not create an upload loop.
+    time.sleep(10)
+    capture("14-bot-requests", theme)
+    before = relay("/health")["sequence"]
+    time.sleep(20)
+    if relay("/health")["sequence"] != before:
+        raise RuntimeError("Idle phone uploaded repeatedly with status notifications disabled")
+    tap("allow_service_notifications")
+    tap("Allow")
+    tap("retry_push")
     node("continue_setup")
     capture("03-done", theme)
     tap("continue_setup")
@@ -216,10 +265,18 @@ for theme in (["light", "dark"] if args.theme == "both" else [args.theme]):
     queued = relay("/dismiss", {"keys": [item["key"]], "reason": "capture verification"})
     if queued["queued"] != [item["key"]] or queued["dryRun"]:
         raise RuntimeError("A new pairing could not queue a real dismissal immediately")
-    request_id = next(entry["requestId"] for entry in relay()["pending"] if entry["key"] == item["key"])
-    # There is no push channel: force a phone exchange to exercise delivery now.
-    tap("post_now")
+    request_id = queued["requestIds"][item["key"]]
     receipt(request_id)
+    if theme == "light":
+        background_clear(False)
+        background_clear(True)
+        adb("shell", "input", "keyevent", "KEYCODE_HOME")
+        time.sleep(10)
+        before = relay("/health")["sequence"]
+        time.sleep(30)
+        if relay("/health")["sequence"] != before:
+            raise RuntimeError("Idle phone uploaded without a notification or command")
+        print("Idle registration and ready-phone upload checks passed", flush=True)
     # Granted access must survive a cold launch while the listener rebinds.
     cold_launch()
     node("post_now")

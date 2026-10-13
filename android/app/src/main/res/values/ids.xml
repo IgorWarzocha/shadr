@@ -7,6 +7,9 @@
     <item name="test_connection" type="id" />
     <item name="allow_access" type="id" />
     <item name="open_app_settings" type="id" />
+    <item name="retry_push" type="id" />
+    <item name="allow_service_notifications" type="id" />
+    <item name="background_settings" type="id" />
     <item name="continue_setup" type="id" />
     <item name="back" type="id" />
     <item name="settings" type="id" />

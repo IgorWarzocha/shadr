@@ -3,7 +3,7 @@ package dev.howaboua.phonedigest
 import java.net.URI
 import java.time.ZoneId
 
-enum class ClearingAction { ACK_MISSING, ACK_DISMISSED, WAIT, CANCEL }
+enum class ClearingAction { ACK_NOT_FOUND, ACK_APPLIED, ACK_FAILED, WAIT, CANCEL }
 
 object Policy {
     const val MAX_SEQUENCE = 9_007_199_254_740_991L
@@ -15,10 +15,14 @@ object Policy {
         return if (sensitive) "" to "" else title to text
     }
     val builtinAuthenticators = setOf("com.google.android.apps.authenticator2", "com.azure.authenticator", "com.authy.authy", "com.yubico.yubioath", "com.beemdevelopment.aegis", "org.fedorahosted.freeotp", "com.twofasapp", "com.duosecurity.duomobile")
-    fun clearingAction(present: Boolean, attempted: Boolean, paused: Boolean) = when {
-        !present -> if (attempted) ClearingAction.ACK_DISMISSED else ClearingAction.ACK_MISSING
+    const val CLEAR_RETRY_MILLIS = 2500L
+    const val CLEAR_CONFIRM_MILLIS = 5000L
+    fun clearingAction(present: Boolean, attempted: Boolean, paused: Boolean, ageMillis: Long, tries: Int) = when {
+        !present -> if (attempted) ClearingAction.ACK_APPLIED else ClearingAction.ACK_NOT_FOUND
+        tries > 0 && ageMillis >= CLEAR_CONFIRM_MILLIS -> ClearingAction.ACK_FAILED
         paused -> ClearingAction.WAIT
-        else -> ClearingAction.CANCEL
+        tries == 0 || (tries < 2 && ageMillis >= CLEAR_RETRY_MILLIS) -> ClearingAction.CANCEL
+        else -> ClearingAction.WAIT
     }
     fun nextSequence(previous: Long): Long {
         check(previous in 0 until MAX_SEQUENCE) { "Sequence exhausted or invalid" }

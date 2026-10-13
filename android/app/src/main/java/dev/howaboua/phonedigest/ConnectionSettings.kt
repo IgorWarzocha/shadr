@@ -45,7 +45,7 @@ data class ConnectionSettings(
     }
 }
 
-data class ConnectionResult(val connected: Boolean, val message: String)
+data class ConnectionResult(val connected: Boolean, val message: String, val pushConfig: PushConfig? = null)
 
 object ConnectionTest {
     fun check(settings: ConnectionSettings, open: (URI) -> HttpURLConnection = { it.toURL().openConnection() as HttpURLConnection }): ConnectionResult {
@@ -79,8 +79,12 @@ object ConnectionTest {
                 if (size > 65_536) return unverified
                 String(chars, 0, size)
             }
-            when (JSONObject(body).opt("role")) {
-                "phone" -> ConnectionResult(true, "Connected to your inbox.")
+            val json = JSONObject(body)
+            when (json.opt("role")) {
+                "phone" -> {
+                    val push = runCatching { json.optJSONObject("pushConfig")?.let { PushConfig.parse(it) } }.getOrNull()
+                    ConnectionResult(true, "Connected to your inbox.", push)
+                }
                 "bot" -> ConnectionResult(false, "These details aren't for your phone. Try a new QR code.")
                 else -> unverified
             }

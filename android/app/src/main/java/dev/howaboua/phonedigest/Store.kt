@@ -7,6 +7,7 @@ import org.json.JSONObject
 import java.time.ZoneId
 
 data class ConnectionSession(val settings: ConnectionSettings, val revision: Long)
+data class ClearAttempt(val startedAt: Long, val tries: Int)
 
 enum class PostState { IDLE, POSTED, FAILED }
 
@@ -18,8 +19,9 @@ class Store(private val prefs: SharedPreferences) {
     }
     private fun resetConnection(edit: SharedPreferences.Editor): SharedPreferences.Editor = edit
         .putLong("connectionRevision", prefs.getLong("connectionRevision", 0) + 1)
-        .putString("pending", "[]").putString("outcomes", "[]").putStringSet("attempted", emptySet())
+        .putString("pending", "[]").putString("outcomes", "[]").putStringSet("attempted", emptySet()).putString("attemptInfo", "{}")
         .putLong("lastPost", 0).putInt("itemCount", 0).putString("postState", "IDLE")
+        .remove("pushConfig").remove("pushToken").putBoolean("pushRegistered", false).putBoolean("pushFailed", false)
     private fun saveIdentity(key: String, value: String) = synchronized(stateLock) {
         if (prefs.getString(key, "") != value) check(resetConnection(prefs.edit().putString(key, value)).commit())
     }
@@ -38,12 +40,34 @@ class Store(private val prefs: SharedPreferences) {
     val mode: ConnectionMode get() = ConnectionMode.infer(endpoint)
     val connection: ConnectionSettings get() = ConnectionSettings(mode, endpoint, token, zone, accessId, accessSecret)
     val configured: Boolean get() = endpoint.isNotBlank() && token.isNotBlank()
-    fun saveSettings(settings: ConnectionSettings) = synchronized(stateLock) {
+    fun saveSettings(settings: ConnectionSettings, push: PushConfig? = null) = synchronized(stateLock) {
         settings.validate()
         val edit = prefs.edit().putString("endpoint", settings.endpoint.trimEnd('/')).putString("token", settings.token)
             .putString("accessId", settings.accessId).putString("accessSecret", settings.accessSecret)
         if (connection.copy(zone = "", endpoint = endpoint.trimEnd('/')) != settings.copy(zone = "", endpoint = settings.endpoint.trimEnd('/'))) resetConnection(edit)
+        if (push != pushConfig) edit.remove("pushToken").putBoolean("pushRegistered", false)
+        if (push == null) edit.remove("pushConfig") else edit.putString("pushConfig", push.json().toString())
         check(edit.commit()) { "Could not save settings" }
+    }
+    val pushConfig: PushConfig? get() = prefs.getString("pushConfig", null)?.let { PushConfig.parse(JSONObject(it)) }
+    val pushToken: String? get() = prefs.getString("pushToken", null)
+    val pushRegistered: Boolean get() = pushConfig != null && pushToken != null && prefs.getBoolean("pushRegistered", false)
+    val pushRegistrationFailed: Boolean get() = prefs.getBoolean("pushFailed", false)
+    fun updatePushConfig(config: PushConfig?) {
+        if (config == pushConfig) return
+        val edit = prefs.edit().remove("pushToken").putBoolean("pushRegistered", false).putBoolean("pushFailed", false)
+        if (config == null) edit.remove("pushConfig") else edit.putString("pushConfig", config.json().toString())
+        check(edit.commit())
+    }
+    fun savePushToken(token: String) {
+        require(token.isNotBlank() && token.length <= 4096 && token.none { it.isWhitespace() })
+        val edit = prefs.edit().putString("pushToken", token).putBoolean("pushFailed", false)
+        if (pushToken != token) edit.putBoolean("pushRegistered", false)
+        check(edit.commit())
+    }
+    fun pushFailed() { check(prefs.edit().putBoolean("pushFailed", true).commit()) }
+    fun pushSent(token: String?) {
+        if (token != null && token == pushToken) check(prefs.edit().putBoolean("pushRegistered", true).commit())
     }
     var token: String
         get() = prefs.getString("token", "")!!
@@ -77,7 +101,7 @@ class Store(private val prefs: SharedPreferences) {
     }
     fun outcomes(): JSONArray = JSONArray(prefs.getString("outcomes", "[]"))
     fun acknowledge(command: DismissCommand, status: String) {
-        require(status in setOf("dismissed", "missing"))
+        require(status in setOf("applied", "failed", "not_found", "dismissed", "missing", "protected"))
         val old = outcomes()
         val entries = JSONArray()
         for (index in 0 until old.length()) {
@@ -85,13 +109,39 @@ class Store(private val prefs: SharedPreferences) {
             if (outcome.getString("requestId") != command.requestId) entries.put(outcome)
         }
         entries.put(JSONObject().put("key", command.key).put("requestId", command.requestId).put("status", status))
-        check(prefs.edit().putString("outcomes", entries.toString()).commit())
+        val attempts = JSONObject(prefs.getString("attemptInfo", "{}")!!)
+        attempts.remove(command.identity)
+        check(prefs.edit().putString("outcomes", entries.toString())
+            .putString("pending", Protocol.encode(pending.filterNot { it == command }).toString())
+            .putStringSet("attempted", attempted - command.identity).putString("attemptInfo", attempts.toString()).commit())
     }
     fun raiseSequence(serverSequence: Long) {
         require(serverSequence in 0..Policy.MAX_SEQUENCE)
         check(prefs.edit().putLong("sequence", maxOf(prefs.getLong("sequence", 0), serverSequence)).commit())
     }
-    fun clearOutcomes() { save("outcomes", "[]") }
+    fun removeSentOutcomes(sent: JSONArray) {
+        fun identity(value: JSONObject) = Triple(value.getString("requestId"), value.getString("key"), value.getString("status"))
+        val sentIds = (0 until sent.length()).map { identity(sent.getJSONObject(it)) }.toSet()
+        val remaining = JSONArray()
+        val current = outcomes()
+        for (index in 0 until current.length()) {
+            val entry = current.getJSONObject(index)
+            if (identity(entry) !in sentIds) remaining.put(entry)
+        }
+        save("outcomes", remaining.toString())
+    }
+    fun clearAttempt(command: DismissCommand): ClearAttempt? {
+        val value = JSONObject(prefs.getString("attemptInfo", "{}")!!).optJSONObject(command.identity) ?: return null
+        return ClearAttempt(value.getLong("startedAt"), value.getInt("tries"))
+    }
+    fun recordClearAttempt(command: DismissCommand, now: Long) {
+        val values = JSONObject(prefs.getString("attemptInfo", "{}")!!)
+        val previous = clearAttempt(command)?.takeIf { it.startedAt <= now }
+        val tries = (previous?.tries ?: 0) + 1
+        check(tries <= 2) { "Cancellation retry limit exceeded" }
+        values.put(command.identity, JSONObject().put("startedAt", previous?.startedAt ?: now).put("tries", tries))
+        check(prefs.edit().putString("attemptInfo", values.toString()).putStringSet("attempted", attempted + command.identity).commit())
+    }
     var pending: List<DismissCommand>
         get() = Protocol.decode(JSONArray(prefs.getString("pending", "[]")))
         set(value) { save("pending", Protocol.encode(value).toString()) }
