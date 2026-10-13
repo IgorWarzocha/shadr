@@ -10,8 +10,6 @@ import { isTailnetAddress, isLocalHost } from "../src/local-network.js";
 let runtime, db;
 const bindings = {
   PHONE_TOKEN: "test-phone-secret", BOT_TOKEN: "test-bot-secret", MODE: "local",
-  NOISE_PACKAGES: '["noise.app","protected.app"]', PROTECTED_PACKAGES: '["protected.app"]',
-  LIVE_DISMISSALS: "false",
 };
 let source;
 function options(env = bindings) {
@@ -86,39 +84,56 @@ test("latest bound snapshot replaces JSON, stale and unbound posts cannot overwr
   assert.deepEqual((await request("/notifications")).data.notifications, []);
   assert.deepEqual((await request("/notifications")).data.dismissalLog, []);
 });
-test("only noise queues, protected wins, dry-run sticks until explicit requeue", async () => {
-  await request("/notifications", "phone", shade(1, [item(), item("protected", "protected.app"), item("message", "message.app")]));
-  const result = await request("/dismiss", "bot", { keys: ["one", "protected", "message", "gone"], reason: "noise" });
-  assert.deepEqual(result.data.queued, ["one"]);
-  assert.deepEqual(result.data.ignored, ["protected", "message", "gone"]);
-  const suggestion = (await request("/notifications", "phone", shade(2))).data;
-  assert.deepEqual(suggestion,
-    { dryRun: true, dismiss: [], wouldDismiss: ["one"], requestIds: { one: suggestion.requestIds.one } });
-  await configure(options({ ...bindings, LIVE_DISMISSALS: "true" }));
-  assert.equal((await request("/notifications", "phone", shade(3))).data.dryRun, true);
-  await db.prepare("UPDATE device SET startedAt='2020-01-01T00:00:00.000Z'").run();
-  assert.deepEqual((await request("/notifications", "phone", shade(4))).data,
-    { dryRun: false, dismiss: [], wouldDismiss: ["one"], requestIds: suggestion.requestIds });
-  await request("/dismiss", "bot", { keys: ["one"], reason: "approved noise" });
-  const command = (await request("/notifications", "phone", shade(5))).data;
-  assert.deepEqual(command.dismiss, ["one"]);
-  assert.notEqual(command.requestIds.one, suggestion.requestIds.one);
-  await request("/notifications", "phone", shade(6, [], { outcomes: [{ key: "one", status: "dismissed", requestId: command.requestIds.one }] }));
-  const inbox = (await request("/notifications")).data;
-  assert.deepEqual(inbox.pending, []);
-  assert.ok(inbox.dismissalLog.some(row => row.event === "dismissed" && row.reason === "approved noise"));
-});
-test("policy removal revokes pending delivery and absent keys leave queue", async () => {
-  await request("/notifications", "phone", shade());
-  await request("/dismiss", "bot", { keys: ["one"], reason: "noise" });
-  await configure(options({ ...bindings, NOISE_PACKAGES: "[]" }));
-  assert.deepEqual((await request("/notifications", "phone", shade(2))).data.wouldDismiss, []);
-  await request("/notifications", "phone", shade(3, []));
+test("all current apps queue immediately and obsolete settings cannot block delivery", async () => {
+  await configure(options({ ...bindings, LIVE_DISMISSALS: "false", NOISE_PACKAGES: "invalid", PROTECTED_PACKAGES: "invalid" }));
+  const notifications = [item(), item("bank", "bank.app"), item("system", "com.android.systemui")];
+  await request("/notifications", "phone", shade(1, notifications));
+  assert.deepEqual((await request("/dismiss", "bot", { keys: ["one", "bank", "system", "gone"], reason: "clear" })).data,
+    { dryRun: false, queued: ["one", "bank", "system"], ignored: ["gone"] });
+  const live = (await request("/notifications", "phone", shade(2, notifications))).data;
+  assert.equal(live.dryRun, false);
+  assert.deepEqual(live.dismiss, ["bank", "one", "system"]);
+  assert.deepEqual(live.wouldDismiss, []);
+  const unbound = (await request("/notifications", "phone", shade(3, [], { listenerBound: false }))).data;
+  assert.deepEqual(unbound.dismiss, []);
+  assert.deepEqual((await request("/notifications", "phone", shade(4, notifications))).data.requestIds, live.requestIds);
+  await request("/notifications", "phone", shade(5, []));
   assert.deepEqual((await request("/notifications")).data.pending, []);
 });
-test("key reuse by a protected package revokes old noise commands without inventing a result", async () => {
-  await configure(options({ ...bindings, LIVE_DISMISSALS: "true" }));
-  await db.prepare("UPDATE device SET startedAt='2020-01-01T00:00:00.000Z'").run();
+test("legacy dry-run commands execute with their original IDs and record live receipts", async () => {
+  await request("/notifications", "phone", shade());
+  await request("/dismiss", "bot", { keys: ["one"], reason: "old request" });
+  await db.batch([
+    db.prepare("UPDATE dismissals SET dryRun=1"),
+    db.prepare("UPDATE dismissal_log SET dryRun=1"),
+  ]);
+  const old = (await request("/notifications")).data;
+  assert.equal(old.pending[0].dryRun, 0);
+  const requestId = old.pending[0].requestId;
+  assert.deepEqual((await request("/dismiss", "bot", { keys: ["one"], reason: "retry" })).data.queued, []);
+  const command = (await request("/notifications", "phone", shade(2))).data;
+  assert.deepEqual(command.dismiss, ["one"]);
+  assert.equal(command.requestIds.one, requestId);
+  // A mixed legacy pending/log flag must not duplicate the matched request.
+  await db.prepare("UPDATE dismissals SET dryRun=0").run();
+  const outcomes = [{ key: "one", status: "dismissed", requestId }];
+  await request("/notifications", "phone", shade(3, [], { outcomes }));
+  await request("/notifications", "phone", shade(4, [], { outcomes }));
+  const inbox = (await request("/notifications")).data;
+  assert.deepEqual(inbox.pending, []);
+  assert.deepEqual(inbox.dismissalLog.map(row => [row.event, row.dryRun]), [["requested", 1], ["dismissed", 0]]);
+  await request("/notifications", "phone", shade(5));
+  await request("/dismiss", "bot", { keys: ["one"], reason: "legacy late receipt" });
+  const lateId = (await request("/notifications")).data.pending[0].requestId;
+  await db.prepare("UPDATE dismissal_log SET dryRun=1 WHERE requestId=?").bind(lateId).run();
+  await request("/notifications", "phone", shade(6, []));
+  await request("/notifications", "phone", shade(7, [], {
+    outcomes: [{ key: "one", status: "dismissed", requestId: lateId }],
+  }));
+  const late = (await request("/notifications")).data.dismissalLog.filter(row => row.requestId === lateId);
+  assert.deepEqual(late.map(row => [row.event, row.dryRun]), [["requested", 1], ["dismissed", 0]]);
+});
+test("key reuse by a different package ends old commands without inventing a result", async () => {
   await request("/notifications", "phone", shade());
   await request("/dismiss", "bot", { keys: ["one"], reason: "noise" });
   const reply = (await request("/notifications", "phone", shade(2, [item("one", "protected.app")]))).data;
@@ -128,8 +143,6 @@ test("key reuse by a protected package revokes old noise commands without invent
   assert.deepEqual(inbox.dismissalLog.map(row => row.event), ["requested"]);
 });
 test("delayed outcomes survive missing snapshots and cannot consume a new lifecycle's request", async () => {
-  await configure(options({ ...bindings, LIVE_DISMISSALS: "true" }));
-  await db.prepare("UPDATE device SET startedAt='2020-01-01T00:00:00.000Z'").run();
   await request("/notifications", "phone", shade());
   await request("/dismiss", "bot", { keys: ["one"], reason: "first request" });
   const first = (await request("/notifications", "phone", shade(2))).data.requestIds.one;
@@ -174,8 +187,6 @@ test("D1 failure rolls back the entire snapshot, including health and clears", a
   } finally { await db.prepare("DROP TRIGGER reject_broken").run(); }
 });
 test("seven-day log pruning preserves old pending commands, retries and late acknowledgements", async () => {
-  await configure(options({ ...bindings, LIVE_DISMISSALS: "true" }));
-  await db.prepare("UPDATE device SET startedAt='2020-01-01T00:00:00.000Z'").run();
   await request("/notifications", "phone", shade());
   await request("/dismiss", "bot", { keys: ["one"], reason: "noise" });
   const sevenDays = Date.now() - 7 * 86400_000;
@@ -217,6 +228,18 @@ test("tailnet hostnames work without opening local mode to arbitrary domains", a
   }
   for (const host of ["100.64.0.1", "100.127.255.255"]) assert.equal(isTailnetAddress(host), true);
 });
+test("public HTTPS Funnel origin keeps bearer authentication and health roles", async () => {
+  const origin = "https://inbox.example.ts.net:10000/health";
+  assert.equal((await runtime.dispatchFetch(origin)).status, 401);
+  assert.equal((await runtime.dispatchFetch(origin, { headers: { Authorization: "Bearer wrong" } })).status, 401);
+  for (const role of ["phone", "bot"]) {
+    const response = await runtime.dispatchFetch(origin, {
+      headers: { Authorization: "Bearer " + bindings[role === "phone" ? "PHONE_TOKEN" : "BOT_TOKEN"] },
+    });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).role, role);
+  }
+});
 test("cloud mode fails closed without configured Access", async () => {
   await configure(options({ ...bindings, MODE: "cloud" }));
   assert.equal((await request("/health")).status, 503);
@@ -255,12 +278,11 @@ test("permission metadata, concise read contracts and safe errors are explicit",
   assert.equal((await request("/notifications", "phone", shade(3))).data.state, "stale_sequence");
 });
 
-test("queue/send never implies dismissal and dry-run or unknown receipts cannot fabricate success", async () => {
+test("queue/send never implies dismissal and unknown receipts cannot fabricate success", async () => {
   await request("/notifications", "phone", shade());
   await request("/dismiss", "bot", { keys: ["one"], reason: "noise" });
   const first = (await request("/notifications", "phone", shade(2))).data;
   const outcomes = [
-    { key: "one", requestId: first.requestIds.one, status: "dismissed" },
     { key: "one", requestId: "unknown-command", status: "dismissed" },
   ];
   await request("/notifications", "phone", shade(3, [item()], { outcomes }));
@@ -276,8 +298,6 @@ test("queue/send never implies dismissal and dry-run or unknown receipts cannot 
 });
 
 test("request retries and receipt retries acknowledge once without consuming replacement commands", async () => {
-  await configure(options({ ...bindings, LIVE_DISMISSALS: "true" }));
-  await db.prepare("UPDATE device SET startedAt='2020-01-01T00:00:00.000Z'").run();
   await request("/notifications", "phone", shade());
   const payload = { keys: ["one"], reason: "noise" };
   await Promise.all([request("/dismiss", "bot", payload), request("/dismiss", "bot", payload)]);
@@ -295,22 +315,20 @@ test("request retries and receipt retries acknowledge once without consuming rep
 });
 
 test("receipt retention uses relay receipt time and keeps the exact seven-day boundary", async () => {
-  await configure(options({ ...bindings, LIVE_DISMISSALS: "true" }));
-  await db.prepare("UPDATE device SET startedAt='2020-01-01T00:00:00.000Z'").run();
   await request("/notifications", "phone", shade());
   await request("/dismiss", "bot", { keys: ["one"], reason: "noise" });
   const command = (await request("/notifications", "phone", shade(2))).data;
   const received = new Date();
-  await ingest(db, { ...bindings, LIVE_DISMISSALS: "true" }, shade(3, [], {
+  await ingest(db, shade(3, [], {
     capturedAt: "2020-01-01T00:00:00.000Z", lastListenerAt: "2020-01-01T00:00:00.000Z",
     outcomes: [{ key: "one", requestId: command.requestIds.one, status: "dismissed" }],
   }), received);
-  const receipt = (await readInbox(db, bindings, received)).dismissalLog.find(row => row.event === "dismissed");
+  const receipt = (await readInbox(db, received)).dismissalLog.find(row => row.event === "dismissed");
   assert.equal(receipt.at, received.toISOString());
   const boundary = new Date(received.getTime() + 7 * 86400_000);
-  assert.equal((await readInbox(db, bindings, boundary)).dismissalLog.filter(row => row.event === "dismissed").length, 1);
-  assert.equal((await readInbox(db, bindings, new Date(boundary.getTime() + 1))).dismissalLog.length, 0);
-  await ingest(db, bindings, shade(4, [], { listenerBound: false }), new Date(boundary.getTime() + 1));
+  assert.equal((await readInbox(db, boundary)).dismissalLog.filter(row => row.event === "dismissed").length, 1);
+  assert.equal((await readInbox(db, new Date(boundary.getTime() + 1))).dismissalLog.length, 0);
+  await ingest(db, shade(4, [], { listenerBound: false }), new Date(boundary.getTime() + 1));
   assert.equal((await db.prepare("SELECT count(*) AS count FROM dismissal_log").first()).count, 0);
 });
 
@@ -354,7 +372,7 @@ test("forward migration retains current shade and correlated recent receipts, no
       old.prepare("INSERT INTO dismissal_log(key,package,at,actor,reason,dryRun,event,requestId) VALUES ('old','noise.app','2020-01-01T00:00:00.000Z','bot','noise',0,'dismissed','expired')"),
     ]);
     await apply(files[3]);
-    const result = await readInbox(old, bindings, new Date());
+    const result = await readInbox(old, new Date());
     assert.deepEqual(result.notifications, [{ key: "live", package: "noise.app", appName: "App", title: "Title", text: "Preview" }]);
     assert.equal(result.capturedAt, null);
     assert.equal(result.receivedAt, null);
@@ -364,8 +382,8 @@ test("forward migration retains current shade and correlated recent receipts, no
     assert.equal(await old.prepare("SELECT name FROM sqlite_master WHERE name='notifications'").first(), null);
     assert.equal((await old.prepare("PRAGMA table_info(dismissal_log)").all()).results.some(row => row.name === "actor"), false);
     const outcomes = [{ key: "live", requestId: "keep-command", status: "dismissed" }];
-    await ingest(old, bindings, shade(43, [], { outcomes }), new Date());
-    const acknowledged = await readInbox(old, bindings, new Date());
+    await ingest(old, shade(43, [], { outcomes }), new Date());
+    const acknowledged = await readInbox(old, new Date());
     assert.deepEqual(acknowledged.dismissalLog.map(row => row.event), ["dismissed"]);
     assert.deepEqual(acknowledged.pending, []);
   } finally { await upgrade.dispose(); }

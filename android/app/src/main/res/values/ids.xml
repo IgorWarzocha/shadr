@@ -1,24 +1,18 @@
 <resources>
     <item name="endpoint" type="id" />
     <item name="phone_token" type="id" />
-    <item name="access_id" type="id" />
-    <item name="access_secret" type="id" />
-    <item name="protected_packages" type="id" />
-    <item name="authenticator_packages" type="id" />
-    <item name="noise_packages" type="id" />
-    <item name="live_dismissal" type="id" />
-    <item name="advanced_policy" type="id" />
+    <item name="pause_clearing" type="id" />
     <item name="status" type="id" />
     <item name="feedback" type="id" />
     <item name="test_connection" type="id" />
     <item name="allow_access" type="id" />
+    <item name="open_app_settings" type="id" />
     <item name="continue_setup" type="id" />
     <item name="back" type="id" />
     <item name="settings" type="id" />
     <item name="post_now" type="id" />
     <item name="edit_connection" type="id" />
-    <item name="save_settings" type="id" />
-    <item name="access_toggle" type="id" />
+    <item name="enter_manual" type="id" />
     <item name="scan_pairing" type="id" />
     <item name="import_pairing" type="id" />
 </resources>

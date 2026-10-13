@@ -52,12 +52,12 @@ export default {
       }
       if (route === "POST /notifications") {
         if (role !== "phone") throw new HttpError(403, "Phone token required");
-        return json(await ingest(env.DB, env, snapshot(await body(request)), now));
+        return json(await ingest(env.DB, snapshot(await body(request)), now));
       }
       if (["GET /notifications", "POST /dismiss"].includes(route)) {
         if (role !== "bot") throw new HttpError(403, "Bot token required");
-        if (route === "POST /dismiss") return json(await queue(env.DB, env, dismissal(await body(request)), now));
-        const inbox = await readInbox(env.DB, env, now);
+        if (route === "POST /dismiss") return json(await queue(env.DB, dismissal(await body(request)), now));
+        const inbox = await readInbox(env.DB, now);
         return json(inbox);
       }
       throw new HttpError(404, "Not found");

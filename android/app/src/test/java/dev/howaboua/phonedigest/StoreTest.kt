@@ -5,35 +5,48 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class StoreTest {
-    @Test fun upgradePreservesConfigurationWithDefaultProtection() {
+    private val settings = ConnectionSettings(ConnectionMode.CLOUDFLARE, "https://example.com", "phone", "Europe/London")
+    @Test fun obsoleteProductGatesAreRemovedWithoutErasingCredentialsOrPrivacyOverrides() {
         val prefs = MemoryPreferences()
-        val old = Store(prefs)
-        old.endpoint = "http://100.64.0.1"
-        old.token = "saved-token"
-        old.extraAuthenticators = setOf("example.auth")
-        old.extraProtected = setOf("example.bank")
-        old.liveEnabled = true
-        assertTrue(Store(prefs).configured)
-        assertFalse(Store(prefs).liveAllowed)
-        prefs.failCommits = true
-        assertThrows(IllegalStateException::class.java) { old.saveSettings(old.connection, old.extraProtected, old.extraAuthenticators, emptySet(), emptySet(), false) }
-        assertTrue(Store(prefs).configured)
-        prefs.failCommits = false
-        old.saveSettings(old.connection, old.extraProtected, old.extraAuthenticators, emptySet(), emptySet(), false)
-        assertTrue(Store(prefs).configured)
-        assertEquals(setOf("example.auth"), Store(prefs).extraAuthenticators)
-        assertEquals(setOf("example.bank"), Store(prefs).extraProtected)
+        prefs.edit().putString("endpoint", settings.endpoint).putString("token", settings.token)
+            .putBoolean("live", false).putBoolean("allowClearing", false).putBoolean("serverLive", false)
+            .putLong("installedAt", System.currentTimeMillis()).putString("zone", "Asia/Tokyo")
+            .putStringSet("noise", mutableSetOf("example.noise"))
+            .putStringSet("protected", mutableSetOf("com.chase.sig.android"))
+            .putStringSet("smsPackages", mutableSetOf("example.sms"))
+            .putStringSet("authenticators", mutableSetOf("example.codes")).commit()
+        val store = Store(prefs)
+        assertTrue(store.configured)
+        assertEquals(settings.token, store.token)
+        assertFalse(store.paused)
+        assertEquals(setOf("example.codes"), store.extraAuthenticators)
+        for (key in listOf("live", "allowClearing", "serverLive", "installedAt", "zone", "noise", "protected", "smsPackages")) assertFalse(prefs.contains(key))
     }
-    @Test fun unsafeExistingNoiseIsExcludedAndStatusIsStructured() {
+    @Test fun freshPairingIsUnpausedAndPauseSurvivesRestartAndPairingAgain() {
         val prefs = MemoryPreferences()
         val store = Store(prefs)
-        store.noise = setOf("com.azure.authenticator", "example.game", "example.bank")
-        store.extraProtected = setOf("example.bank")
-        assertEquals(setOf("example.game"), Store(prefs).noise)
+        assertFalse(store.paused)
+        store.saveSettings(settings)
+        assertFalse(Store(prefs).paused)
+        store.paused = true
+        Store(prefs).saveSettings(settings.copy(endpoint = "https://new.example", token = "new-phone"))
+        assertTrue(Store(prefs).paused)
+        Store(prefs).paused = false
+        assertFalse(Store(prefs).paused)
+    }
+    @Test fun failedPauseCommitCannotChangeTheUserChoice() {
+        val prefs = MemoryPreferences()
+        val store = Store(prefs)
+        prefs.failCommits = true
+        assertThrows(IllegalStateException::class.java) { store.paused = true }
+        assertFalse(store.paused)
+    }
+    @Test fun sendStatusIsStructured() {
+        val store = Store(MemoryPreferences())
         assertEquals(0L, store.lastPost)
         store.posted(7)
-        assertEquals(7, Store(prefs).itemCount)
-        assertTrue(Store(prefs).lastPost > 0)
+        assertEquals(7, store.itemCount)
+        assertTrue(store.lastPost > 0)
     }
     @Test fun setupOnlyAdvancesWithRealConfigurationAndAccess() {
         assertEquals(SetupStep.CONNECT, SetupFlow.initial(false, NotificationAccess.REQUIRED))
@@ -42,6 +55,13 @@ class StoreTest {
         assertEquals(SetupStep.MAIN, SetupFlow.initial(true, NotificationAccess.CONNECTED))
         assertEquals(SetupStep.ALLOW, SetupFlow.connected(NotificationAccess.REQUIRED))
         assertEquals(SetupStep.DONE, SetupFlow.connected(NotificationAccess.CONNECTED))
+    }
+    @Test fun restrictedSettingsHelpOnlyAppearsForUngrantOnAndroid13AndNewer() {
+        assertFalse(SetupFlow.restrictedSettingsHelp(32, NotificationAccess.REQUIRED))
+        assertTrue(SetupFlow.restrictedSettingsHelp(33, NotificationAccess.REQUIRED))
+        assertTrue(SetupFlow.restrictedSettingsHelp(35, NotificationAccess.REQUIRED))
+        assertFalse(SetupFlow.restrictedSettingsHelp(35, NotificationAccess.CONNECTED))
+        assertFalse(SetupFlow.restrictedSettingsHelp(35, NotificationAccess.WAITING_FOR_LISTENER))
     }
     @Test fun grantedAccessWithUnboundListenerColdStartsOnMain() {
         val coldLaunch = SetupFlow.access(granted = true, bound = false)
@@ -58,52 +78,42 @@ class StoreTest {
         store.endpoint = "https://inbox.example"
         store.accessId = "saved-id"
         store.accessSecret = "saved-secret"
-        store.extraProtected = setOf("example.bank")
         assertEquals(ConnectionMode.CLOUDFLARE, Store(prefs).mode)
         val local = ConnectionSettings(ConnectionMode.TAILNET, "http://100.64.0.1", "token", "Europe/London", store.accessId, store.accessSecret)
-        store.saveSettings(local, store.extraProtected, emptySet(), emptySet(), emptySet(), false)
+        store.saveSettings(local)
         assertEquals(ConnectionMode.TAILNET, Store(prefs).mode)
         assertEquals("saved-secret", Store(prefs).accessSecret)
-        assertEquals(setOf("example.bank"), Store(prefs).extraProtected)
     }
     @Test fun invalidDraftAndFailedSaveLeavePreviousSettingsIntact() {
         val prefs = MemoryPreferences()
         val store = Store(prefs)
-        val local = ConnectionSettings(ConnectionMode.TAILNET, "http://100.64.0.1", "token", "Europe/London")
-        store.saveSettings(local, emptySet(), emptySet(), emptySet(), emptySet(), false)
-        assertThrows(IllegalArgumentException::class.java) { store.saveSettings(local.copy(token = ""), emptySet(), emptySet(), emptySet(), emptySet(), false) }
-        assertThrows(IllegalArgumentException::class.java) { store.saveSettings(local, setOf("example.bank"), emptySet(), emptySet(), setOf("example.bank"), false) }
+        store.saveSettings(settings)
+        assertThrows(IllegalArgumentException::class.java) { store.saveSettings(settings.copy(token = "")) }
         prefs.failCommits = true
-        assertThrows(IllegalStateException::class.java) { store.saveSettings(local.copy(token = "changed"), emptySet(), emptySet(), emptySet(), emptySet(), false) }
-        assertEquals("token", Store(prefs).token)
-        assertTrue(Store(prefs).noise.isEmpty())
+        assertThrows(IllegalStateException::class.java) { store.saveSettings(settings.copy(token = "changed")) }
+        assertEquals("phone", Store(prefs).token)
     }
-
     @Test fun changingInboxDiscardsCommandsAndRejectsSupersededResponse() {
         val store = Store(MemoryPreferences())
-        val a = ConnectionSettings(ConnectionMode.CLOUDFLARE, "https://a.example", "a-phone", "Europe/London", "a-access", "a-secret")
-        store.saveSettings(a, emptySet(), emptySet(), emptySet(), emptySet(), false)
+        val a = settings.copy(endpoint = "https://a.example", token = "a-phone", accessId = "a-access", accessSecret = "a-secret")
+        store.saveSettings(a)
         val oldSession = store.session()
         store.pending = listOf(DismissCommand("old", "old-request"))
         store.attempted = setOf("old-attempt")
         store.acknowledge(DismissCommand("old", "old-request"), "dismissed")
-        store.serverLive = true
         store.posted(5)
-        store.saveSettings(a.copy(endpoint = "https://b.example", token = "b-phone"), emptySet(), emptySet(), emptySet(), emptySet(), false)
+        store.saveSettings(a.copy(endpoint = "https://b.example", token = "b-phone"))
         assertTrue(store.pending.isEmpty())
         assertTrue(store.attempted.isEmpty())
         assertEquals(0, store.outcomes().length())
-        assertFalse(store.serverLive)
         assertEquals(0L, store.lastPost)
         var cancellationCalled = false
         assertFalse(store.ifCurrent(oldSession) {
             store.pending = listOf(DismissCommand("new", "bad-old-response"))
-            store.serverLive = true
             cancellationCalled = true
         })
         assertFalse(cancellationCalled)
         assertTrue(store.pending.isEmpty())
-        assertFalse(store.serverLive)
         val request = object : java.net.HttpURLConnection(java.net.URL(oldSession.settings.endpoint)) {
             override fun connect() {} ; override fun disconnect() {} ; override fun usingProxy() = false
         }
@@ -114,18 +124,33 @@ class StoreTest {
     }
     @Test fun onlyConnectionIdentityChangesInvalidateSession() {
         val store = Store(MemoryPreferences())
-        val a = ConnectionSettings(ConnectionMode.CLOUDFLARE, "https://a.example", "phone", "Europe/London")
-        store.saveSettings(a, emptySet(), emptySet(), emptySet(), emptySet(), false)
+        store.saveSettings(settings)
         val session = store.session()
         store.pending = listOf(DismissCommand("old", "request"))
-        store.saveSettings(a.copy(zone = "Europe/Paris"), emptySet(), emptySet(), emptySet(), emptySet(), false)
+        store.saveSettings(settings.copy(zone = "Europe/Paris"))
         assertTrue(store.ifCurrent(session) {})
         assertEquals(1, store.pending.size)
-        store.saveSettings(a.copy(token = "new-phone"), emptySet(), emptySet(), emptySet(), emptySet(), false)
+        store.saveSettings(settings.copy(token = "new-phone"))
         assertFalse(store.ifCurrent(session) {})
         assertTrue(store.pending.isEmpty())
     }
-
+    @Test fun automaticPairingFailureKeepsEverythingAndSuccessPreservesPauseAndOtpPrivacy() {
+        val prefs = MemoryPreferences()
+        val store = Store(prefs)
+        store.extraAuthenticators = setOf("example.codes")
+        store.paused = true
+        store.saveSettings(settings.copy(accessId = "old-id", accessSecret = "old-secret"))
+        store.pending = listOf(DismissCommand("pending", "id"))
+        val before = prefs.all
+        val attempt = ConnectionAttempt(settings.copy(endpoint = "https://new.example", token = "new-phone"))
+        assertFalse(attempt.commit(ConnectionResult(false, "No connection"), true, store::saveSettings))
+        assertEquals(before, prefs.all)
+        assertTrue(attempt.commit(attempt.authenticate { ConnectionResult(true, "Connected") }, true, store::saveSettings))
+        assertEquals(setOf("example.codes"), store.extraAuthenticators)
+        assertEquals("", store.accessSecret)
+        assertTrue(store.pending.isEmpty())
+        assertTrue(store.paused)
+    }
     @Test fun systemTimeZoneReplacesOldOverrideAndTracksPhoneChanges() {
         val previous = java.util.TimeZone.getDefault()
         try {
@@ -135,15 +160,13 @@ class StoreTest {
             val store = Store(prefs)
             assertEquals("Europe/London", store.zone)
             assertFalse(prefs.contains("zone"))
-            val settings = ConnectionSettings(ConnectionMode.CLOUDFLARE, "https://example.com", "phone", "Asia/Tokyo")
-            store.saveSettings(settings, emptySet(), emptySet(), emptySet(), emptySet(), false)
+            store.saveSettings(settings.copy(zone = "Asia/Tokyo"))
             assertFalse(prefs.contains("zone"))
             assertEquals("Europe/London", store.connection.zone)
             java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Europe/Paris"))
             assertEquals("Europe/Paris", store.connection.zone)
         } finally { java.util.TimeZone.setDefault(previous) }
     }
-
     @Test fun requestsReserveNewDurableSequencesAcrossRestarts() {
         val prefs = MemoryPreferences()
         assertEquals(1L, Store(prefs).reserveSequence())
@@ -164,7 +187,7 @@ class StoreTest {
     @Test fun replayedAcknowledgementsStayUniqueAndSurviveRestart() {
         val prefs = MemoryPreferences()
         Store(prefs).acknowledge(DismissCommand("a", "request-a"), "dismissed")
-        Store(prefs).acknowledge(DismissCommand("b", "request-b"), "protected")
+        Store(prefs).acknowledge(DismissCommand("b", "request-b"), "missing")
         Store(prefs).acknowledge(DismissCommand("a", "request-a"), "dismissed")
         val outcomes = Store(prefs).outcomes()
         assertEquals(2, outcomes.length())
@@ -182,27 +205,23 @@ class StoreTest {
         assertEquals("a", Store(prefs).outcomes().getJSONObject(0).getString("key"))
         assertEquals(1, Store(prefs).outcomes().length())
     }
-    @Test fun pendingIntentAndGatesSurviveProcessRestartWithoutAutoEnabling() {
+    @Test fun pendingIntentAndExplicitPauseSurviveProcessRestart() {
         val prefs = MemoryPreferences()
         val first = Store(prefs)
         val command = DismissCommand("key", "request-id")
         first.pending = listOf(command)
         first.attempted = setOf(command.identity)
-        first.serverLive = true
+        first.paused = true
         val restarted = Store(prefs)
         assertEquals(listOf(command), restarted.pending)
         assertEquals(setOf(command.identity), restarted.attempted)
-        assertTrue(restarted.serverLive)
-        assertFalse(restarted.liveEnabled)
-        assertFalse(restarted.liveAllowed)
-        assertEquals(first.installedAt, restarted.installedAt)
+        assertTrue(restarted.paused)
     }
     @Test fun separateLifecyclesOfSameKeyRetainBothAcknowledgements() {
-        val prefs = MemoryPreferences()
-        val store = Store(prefs)
+        val store = Store(MemoryPreferences())
         store.acknowledge(DismissCommand("key", "old-request"), "dismissed")
         store.acknowledge(DismissCommand("key", "new-request"), "missing")
-        assertEquals(2, Store(prefs).outcomes().length())
+        assertEquals(2, store.outcomes().length())
         assertEquals(setOf("old-request", "new-request"), (0..1).map { store.outcomes().getJSONObject(it).getString("requestId") }.toSet())
     }
 }

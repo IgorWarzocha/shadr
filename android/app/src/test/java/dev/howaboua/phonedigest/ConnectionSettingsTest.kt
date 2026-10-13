@@ -37,15 +37,15 @@ class ConnectionSettingsTest {
         assertTrue(connection.disconnected)
         assertTrue(result.message.startsWith("Connected"))
         connection.code = 302
-        assertTrue(ConnectionTest.check(local) { connection }.message.startsWith("Redirect refused"))
+        assertFalse(ConnectionTest.check(local) { connection }.connected)
     }
     @Test fun successRequiresBoundedJsonWithAuthenticatedPhoneRole() {
         val connection = FakeConnection()
         connection.body = """{"role":"bot"}"""
-        assertTrue(ConnectionTest.check(local) { connection }.message.startsWith("Wrong token"))
+        assertFalse(ConnectionTest.check(local) { connection }.connected)
         for (body in listOf("<html>Login</html>", "{}", """{"role":true}""", """{"role":"unknown"}""", "x".repeat(65_537))) {
             connection.body = body
-            assertTrue(ConnectionTest.check(local) { connection }.message.startsWith("Unverified"))
+            assertFalse(ConnectionTest.check(local) { connection }.connected)
             assertTrue(connection.disconnected)
         }
     }

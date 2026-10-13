@@ -12,11 +12,11 @@ class ShadeListener : NotificationListenerService() {
     override fun onListenerConnected() {
         bound = this
         observed()
-        Posting.schedule(this, immediate = true)
+        Posting.schedule(this)
     }
     override fun onListenerDisconnected() {
         bound = null
-        Posting.schedule(this, immediate = true)
+        Posting.schedule(this)
         requestRebind(android.content.ComponentName(this, ShadeListener::class.java))
     }
     override fun onDestroy() { if (bound === this) bound = null; super.onDestroy() }

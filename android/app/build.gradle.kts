@@ -11,7 +11,7 @@ if (hasReleaseSigning) {
 android {
     namespace = "dev.howaboua.phonedigest"
     compileSdk = 35
-    defaultConfig { applicationId = "dev.howaboua.phonedigest"; minSdk = 26; targetSdk = 35; versionCode = 5; versionName = "0.5" }
+    defaultConfig { applicationId = "dev.howaboua.phonedigest"; minSdk = 26; targetSdk = 35; versionCode = 6; versionName = "0.6"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     buildFeatures { buildConfig = true }
     if (hasReleaseSigning) {
         signingConfigs {
@@ -35,4 +35,7 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.10.1")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    androidTestImplementation("androidx.work:work-testing:2.10.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }

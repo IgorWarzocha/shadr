@@ -3,25 +3,23 @@ package dev.howaboua.phonedigest
 import java.net.URI
 import java.time.ZoneId
 
+enum class ClearingAction { ACK_MISSING, ACK_DISMISSED, WAIT, CANCEL }
+
 object Policy {
-    const val WEEK = 7L * 24 * 60 * 60 * 1000
     const val MAX_SEQUENCE = 9_007_199_254_740_991L
-    private val login = Regex("(?i)(?:(?:verification|security|authentication|one[ -]?time|login|log[ -]?in|sign[ -]?in)\\s+(?:code|password|pin)|\\botp\\b|(?:code|passcode).{0,40}(?:to log[ -]?in|to sign[ -]?in|to authenticate))")
+    private val login = Regex("(?i)(?:\\b(?:otp|2fa|mfa|code|passcode|pin|verification|authentication|authenticator|password)\\b|one[ -]?time|two[ -]?factor|log[ -]?in|sign[ -]?in)")
     private val code = Regex("(?<!\\p{N})(?:\\p{N}{4,8}|\\p{N}{2,4}[ -]\\p{N}{2,4})(?!\\p{N})")
-    @Suppress("UNUSED_PARAMETER") // Retained SMS overrides protect existing configuration.
-    fun redact(pkg: String, title: String, text: String, extraAuthenticators: Set<String>, smsPackages: Set<String> = emptySet()): Pair<String, String> {
-        val authenticator = pkg in extraAuthenticators || pkg in builtinAuthenticators || login.containsMatchIn("$title $text")
-        fun clean(value: String) = if (authenticator) value.replace(Regex("\\p{N}"), "") else value.replace(code, "[code]")
-        return clean(title) to clean(text)
+    fun redact(pkg: String, title: String, text: String, extraAuthenticators: Set<String>): Pair<String, String> {
+        val content = "$title $text"
+        val sensitive = pkg in extraAuthenticators || pkg in builtinAuthenticators || login.containsMatchIn(content) || code.containsMatchIn(content)
+        return if (sensitive) "" to "" else title to text
     }
     val builtinAuthenticators = setOf("com.google.android.apps.authenticator2", "com.azure.authenticator", "com.authy.authy", "com.yubico.yubioath", "com.beemdevelopment.aegis", "org.fedorahosted.freeotp", "com.twofasapp", "com.duosecurity.duomobile")
-    val builtinProtected = builtinAuthenticators + setOf("com.chase.sig.android", "com.infonow.bofa", "com.wf.wellsfargomobile", "com.citi.citimobile", "com.barclays.android.barclaysmobilebanking", "com.hsbc.hsbcukmobilebanking", "com.revolut.revolut", "com.monzo.android", "com.starlingbank.android", "com.paypal.android.p2pmobile")
-    fun protected(pkg: String, system: Boolean, admin: Boolean, overrides: Set<String>): Boolean =
-        system || admin || pkg in builtinProtected || pkg in overrides
-    fun liveAllowed(enabled: Boolean, installedAt: Long, now: Long): Boolean =
-        enabled && installedAt > 0 && now >= installedAt && now - installedAt >= WEEK
-    fun <T> liveQueue(keys: List<T>, serverDryRun: Boolean, localLive: Boolean): List<T> =
-        if (serverDryRun || !localLive) emptyList() else keys
+    fun clearingAction(present: Boolean, attempted: Boolean, paused: Boolean) = when {
+        !present -> if (attempted) ClearingAction.ACK_DISMISSED else ClearingAction.ACK_MISSING
+        paused -> ClearingAction.WAIT
+        else -> ClearingAction.CANCEL
+    }
     fun nextSequence(previous: Long): Long {
         check(previous in 0 until MAX_SEQUENCE) { "Sequence exhausted or invalid" }
         return previous + 1

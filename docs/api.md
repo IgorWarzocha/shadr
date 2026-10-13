@@ -6,7 +6,7 @@ One phone owns the shade. Every request needs `Authorization: Bearer TOKEN`. Clo
 | --- | --- | --- |
 | `POST /notifications` | Phone | Replace the snapshot and receive dismissal commands |
 | `GET /notifications` | Bot | Read the latest valid shade, pending requests and dismissal log |
-| `POST /dismiss` | Bot | Queue noise-package keys |
+| `POST /dismiss` | Bot | Queue currently present notification keys |
 | `GET /health` | Either | Read concise status and phone protocol metadata |
 
 There is no export endpoint or general notification history.
@@ -52,22 +52,22 @@ At most 1,000 notifications and 1,000 outcomes fit in one request. Notification 
 
 Outcome statuses are `dismissed`, `missing` and `protected`. Persist the request ID with the command and echo it in the outcome. Retain outcomes until a successful post acknowledges them. If a response is lost, resend them with a fresh sequence. The relay records each matching request's first accepted outcome once. Unknown or expired request IDs do not create results. An old acknowledgement cannot consume a replacement request for a reused Android key.
 
-Report `dismissed` only after confirming cancellation, not merely issuing an Android cancellation call. A missing key is not an error. Local dry-run refusal is not a successful dismissal. The relay does not accept `dismissed` for a dry-run request.
+Report `dismissed` only after confirming cancellation, not merely issuing an Android cancellation call. A missing key is not an error. Pausing bot clearing on the phone is not a successful dismissal.
 
-The POST response remains:
+For a live request, the POST response is:
 
 ```json
 {
-  "dismiss": [],
-  "wouldDismiss": ["android-notification-key"],
-  "dryRun": true,
+  "dismiss": ["android-notification-key"],
+  "wouldDismiss": [],
+  "dryRun": false,
   "requestIds": {"android-notification-key":"command-id-from-response"}
 }
 ```
 
 Only `dismiss` contains executable commands. Each command has a distinct opaque ID in `requestIds`. Refuse a command without its ID. `wouldDismiss` is informational and must never cancel anything. Pending commands retain their IDs across delivery retries.
 
-The server requires both `LIVE_DISMISSALS=true` and seven days since relay commissioning before live delivery. The phone must independently apply its own first-week, manual-opt-in, noise and protected-package checks. An unbound post never receives executable commands.
+The server delivers commands immediately, without a commissioning hold, package restrictions or a server opt-out. The phone's **Pause bot clearing** control pauses cancellation. An unbound post never receives executable commands. Previously queued dry-run requests now deliver with their original request IDs, without requeueing. Historical receipts keep their original flags, but newly confirmed results use `dryRun: 0`.
 
 ## Queue dismissals
 
@@ -78,12 +78,12 @@ The server requires both `LIVE_DISMISSALS=true` and seven days since relay commi
 At most 100 unique keys, with a non-empty reason of at most 1,000 characters. Use a categorical reason, not copied message text.
 
 ```json
-{"dryRun":true,"queued":["android-notification-key"],"ignored":[]}
+{"dryRun":false,"queued":["android-notification-key"],"ignored":[]}
 ```
 
-Only currently present, server-allowed noise-package keys can queue. Protected packages always win. Missing, protected, non-noise and already queued keys are ignored. Retrying a queue request preserves the pending request ID and does not duplicate its log entry. Explicitly requeueing a dry-run request after live mode is enabled replaces it with a new live request ID.
+Any currently present notification key can queue, including bank and system apps. Missing and already queued keys are ignored. Retrying a queue request preserves the pending request ID and does not duplicate its log entry.
 
-Queueing and command delivery record no successful dismissal. Commands remain pending until an accepted result or a bound snapshot showing the key gone or belonging to a different package. They do not expire with age. Pending is bounded to the latest valid shade's 1,000 keys. Delivery rechecks current server policy and excludes revoked packages. Commands arrive in the next successful phone POST response, not through a push channel.
+Queueing and command delivery record no successful dismissal. Commands remain pending until an accepted result or a bound snapshot showing the key gone or belonging to a different package. They do not expire with age. Pending is bounded to the latest valid shade's 1,000 keys. Commands arrive in the next successful phone POST response, not through a push channel.
 
 Shade absence stops delivery but is never recorded as a dismissal. A later result can still reconcile against its retained request entry. Correlation remains available while the command is pending, even if its request log entry has aged out, or for seven days from a retained request entry. Results are retained seven days from relay receipt, regardless of the phone's capture time.
 
@@ -94,9 +94,9 @@ Shade absence stops delivery but is never recorded as a dismissal. A later resul
 - `notifications`: the latest valid bound snapshot's notification array, without per-item history or inferred ages.
 - `capturedAt`: that snapshot's phone capture timestamp, or null before a valid snapshot.
 - `receivedAt`: that snapshot's relay receipt timestamp, or null before a valid snapshot.
-- `pending`: currently allowed requests with `key`, `package`, `requestedAt`, `reason`, effective `dryRun` as 0 or 1, and `requestId`.
+- `pending`: queued requests with `key`, `package`, `requestedAt`, `reason`, `dryRun: 0`, and `requestId`.
 - `dismissalLog`: seven days of `requested` entries and phone-reported `dismissed`, `missing` or `protected` results. Entries contain `key`, `package`, `at`, `reason`, `dryRun` as 0 or 1, `event` and `requestId`. There is no actor inference or general removal history.
-- `dryRun`: the server's current effective mode as a boolean.
+- `dryRun`: always false, retained for wire compatibility.
 - `status`: `state`, `lastSeenAt` and `nextAction`, as described below.
 
 Reads omit expired log entries. Accepted phone posts and queue writes prune expired log rows. Pending commands and the latest valid shade have no age-based deletion.

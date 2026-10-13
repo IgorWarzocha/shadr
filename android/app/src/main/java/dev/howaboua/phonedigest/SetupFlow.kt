@@ -3,6 +3,7 @@ package dev.howaboua.phonedigest
 enum class SetupStep { CONNECT, ALLOW, DONE, MAIN }
 enum class NotificationAccess { REQUIRED, WAITING_FOR_LISTENER, CONNECTED }
 object SetupFlow {
+    fun restrictedSettingsHelp(apiLevel: Int, access: NotificationAccess) = apiLevel >= 33 && access == NotificationAccess.REQUIRED
     fun access(granted: Boolean, bound: Boolean) = when {
         !granted -> NotificationAccess.REQUIRED
         !bound -> NotificationAccess.WAITING_FOR_LISTENER

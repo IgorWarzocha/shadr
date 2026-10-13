@@ -67,14 +67,3 @@ export function dismissal(value) {
   requireThat(string(value.reason, 1000), "Reason required");
   return value;
 }
-export function policy(env, device, now) {
-  const noise = JSON.parse(env.NOISE_PACKAGES);
-  const protectedPackages = JSON.parse(env.PROTECTED_PACKAGES);
-  if (![noise, protectedPackages].every(list => Array.isArray(list) && list.every(p => string(p, 255)))) {
-    throw new Error("Invalid package policy");
-  }
-  return {
-    noise: noise.filter(p => !protectedPackages.includes(p)),
-    dryRun: env.LIVE_DISMISSALS !== "true" || now - Date.parse(device.startedAt) < 7 * 86400_000,
-  };
-}

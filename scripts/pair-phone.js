@@ -50,7 +50,7 @@ export async function pairPhone(args = process.argv.slice(2)) {
     output: { type: "string" }, help: { type: "boolean" },
   } });
   if (values.help) {
-    console.log("Usage: npm run pair -- [--endpoint https://inbox.example.com] [--credentials private.env] [--output private.gif]\n\nUses the existing PHONE_TOKEN. Defaults to the tailnet address in .local.env.\nWithout --output, displays a secret QR in an interactive terminal.\n--output saves a private GIF instead and refuses to overwrite any file.\nOptional ACCESS_CLIENT_ID and ACCESS_CLIENT_SECRET belong in the credentials file, never command arguments.");
+    console.log("Usage: npm run pair -- [--endpoint https://inbox.example.com] [--credentials private.env] [--output private.gif]\n\nUses the existing PHONE_TOKEN and the configured INBOX_URL, or explicit --endpoint.\nUse the same root URL tested for the phone. Public HTTPS Funnel URLs with a port work without Access credentials. Paths are not accepted.\nImage output is GIF only, not PNG. --output writes a private file and prints no QR or token; existing files are never overwritten.\nWithout --output, displays a secret QR in a human's private interactive terminal. Bots must use a file, not a logged terminal.\nRetrieve a remote file through authenticated file transfer, never by printing its bytes or base64.\nOptional Cloudflare ACCESS_CLIENT_ID and ACCESS_CLIENT_SECRET belong in the credentials file, never command arguments.");
     return;
   }
   if (!values.output && !process.stdout.isTTY) {
@@ -72,7 +72,7 @@ export async function pairPhone(args = process.argv.slice(2)) {
     if (process.stdout.columns && process.stdout.columns < width) {
       throw new Error(`Widen this terminal to at least ${width} columns, or use --output private.gif.`);
     }
-    console.log("Private pairing QR. Anyone who can scan this receives your phone credentials.\nIn Phone inbox, choose Scan QR, then check the server and Test and connect.");
+    console.log("Private pairing QR. Anyone who can scan this receives your phone credentials.\nIn Phone inbox, choose Scan QR. The app will check the connection and connect automatically.");
     console.log(qr);
   }
 }

@@ -41,6 +41,11 @@ class ProtocolTest {
         assertTrue(reply.dismiss.isEmpty())
         assertEquals(listOf(DismissCommand("key", "id")), reply.wouldDismiss)
     }
+    @Test fun legacyDryRunFlagDoesNotVetoCorrelatedDismissCommands() {
+        val reply = Protocol.response(JSONObject("""{"dismiss":["key"],"wouldDismiss":[],"dryRun":true,"requestIds":{"key":"id"}}"""))
+        assertEquals(listOf(DismissCommand("key", "id")), reply.dismiss)
+        assertTrue(reply.dryRun)
+    }
     @Test fun identityCannotConfuseReusedKeysAndOpaqueIds() {
         assertNotEquals(DismissCommand("c", "ab").identity, DismissCommand("bc", "a").identity)
         assertNotEquals(DismissCommand("key", "old").identity, DismissCommand("key", "new").identity)

@@ -59,14 +59,14 @@ object ConnectionTest {
             settings.authenticate(connection)
             return when (connection.responseCode) {
                 200 -> verifyPhoneRole(connection)
-                401, 403 -> ConnectionResult(false, "Connection refused. Check phone token and Access credentials.")
-                in 300..399 -> ConnectionResult(false, "Redirect refused. Use the inbox address, not a login page.")
-                else -> ConnectionResult(false, "Inbox returned HTTP ${connection.responseCode}.")
+                401, 403 -> ConnectionResult(false, "Your inbox didn't accept these details. Try a new QR code.")
+                in 300..399 -> ConnectionResult(false, "This address didn't connect to your inbox. Try a new QR code.")
+                else -> ConnectionResult(false, "Can't reach your inbox. Is your computer or server on?")
             }
         } finally { connection.disconnect() }
     }
     private fun verifyPhoneRole(connection: HttpURLConnection): ConnectionResult {
-        val unverified = ConnectionResult(false, "Unverified inbox response. Check the address and update the inbox server.")
+        val unverified = ConnectionResult(false, "This doesn't look like your inbox. Try a new QR code.")
         return try {
             val body = connection.inputStream.bufferedReader().use { reader ->
                 val chars = CharArray(65_537)
@@ -80,8 +80,8 @@ object ConnectionTest {
                 String(chars, 0, size)
             }
             when (JSONObject(body).opt("role")) {
-                "phone" -> ConnectionResult(true, "Connected. Phone credentials accepted. No notifications uploaded.")
-                "bot" -> ConnectionResult(false, "Wrong token. Enter the phone token, not the bot token.")
+                "phone" -> ConnectionResult(true, "Connected to your inbox.")
+                "bot" -> ConnectionResult(false, "These details aren't for your phone. Try a new QR code.")
                 else -> unverified
             }
         } catch (_: org.json.JSONException) { unverified }

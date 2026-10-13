@@ -56,7 +56,7 @@ async function main() {
   const { values } = parseArgs({ options: { apk: { type: "string" }, bind: { type: "string" },
     port: { type: "string", default: "8788" }, help: { type: "boolean" } } });
   if (values.help) {
-    console.log("Usage: npm run apk:serve -- [--apk path/to/signed.apk] [--bind tailnetIPv4] [--port 8788]\nServes only /phone-inbox.apk, never the checkout or credentials. Stop with Ctrl+C.\nThe default APK is the local debug build, for commissioning only.");
+    console.log("Usage: npm run apk:serve -- [--apk path/to/signed.apk] [--bind tailnetIPv4] [--port 8788]\nServes only /phone-inbox.apk, never the checkout or credentials. Stop with Ctrl+C.\nDefaults to the locally built signed release APK. No debug fallback.");
     return;
   }
   const root = fileURLToPath(new URL("../", import.meta.url));
@@ -64,10 +64,9 @@ async function main() {
   const host = values.bind ?? process.env.BIND_ADDRESS ?? local.BIND_ADDRESS;
   if (!host) throw new Error("Configure the computer's Tailscale address first, or supply --bind.");
   if (!/^\d+$/.test(values.port) || Number(values.port) < 1 || Number(values.port) > 65535) throw new Error("Choose a download port between 1 and 65535.");
-  const apk = values.apk ? resolve(values.apk) : resolve(root, "android/app/build/outputs/apk/debug/app-debug.apk");
+  const apk = values.apk ? resolve(values.apk) : resolve(root, "android/app/build/outputs/apk/release/app-release.apk");
   const running = await serveApk({ apk, host, port: Number(values.port) });
   console.log(`Download: http://${host}:${values.port}/phone-inbox.apk\nSHA-256: ${running.sha256}\nOnly the APK is shared. Stop this download server when installation is complete.`);
-  if (!values.apk) console.log("This is a debug APK for commissioning. Use a signed release for ordinary use.");
   let closing = false;
   const stop = async () => {
     if (closing) return;

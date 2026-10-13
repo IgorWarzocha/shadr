@@ -6,14 +6,11 @@
   "preview_urls": false,
   "d1_databases": [{"binding": "DB", "database_name": "inbox", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations"}],
   "vars": {
-    "MODE": "local",
-    "LIVE_DISMISSALS": "false",
-    "NOISE_PACKAGES": "[]",
-    "PROTECTED_PACKAGES": "[]"
+    "MODE": "local"
   },
   "env": {
     "production": {
-      "vars": {"MODE": "cloud", "LIVE_DISMISSALS": "false", "NOISE_PACKAGES": "[]", "PROTECTED_PACKAGES": "[]"},
+      "vars": {"MODE": "cloud"},
       "d1_databases": [{"binding": "DB", "database_name": "inbox", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations"}]
     }
   }

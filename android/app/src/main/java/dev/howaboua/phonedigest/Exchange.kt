@@ -12,11 +12,15 @@ import java.io.ByteArrayOutputStream
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 
-class Exchange(private val context: Context, private val store: Store) {
+class Exchange(private val context: Context, private val store: Store, private val active: () -> Boolean = { true }) {
     private data class Capture(val payload: ByteArray, val listener: ShadeListener?, val count: Int)
     fun send(session: ConnectionSession = store.session()) {
+        if (sendAttempt(session, recoverConflict = true)) sendAttempt(session, recoverConflict = false)
+    }
+    private fun sendAttempt(session: ConnectionSession, recoverConflict: Boolean): Boolean {
         val capture = synchronized(Store.stateLock) {
-            if (!store.ifCurrent(session) {}) return
+            check(active()) { "Send stopped" }
+            if (!store.ifCurrent(session) {}) return false
             check(store.configured) { "Inbox connection required" }
             session.settings.validate()
             val accessGranted = context.packageName in NotificationManagerCompat.getEnabledListenerPackages(context)
@@ -48,7 +52,11 @@ class Exchange(private val context: Context, private val store: Store) {
             session.settings.authenticate(connection)
             connection.outputStream.use { it.write(capture.payload) }
             val code = connection.responseCode
-            if (code == 409) recoverSequence(session)
+            if (code == 409 && recoverConflict) {
+                recoverSequence(session)
+                // The connection closes in finally before a new shade and sequence are captured.
+                return true
+            }
             check(code in 200..299) { "HTTP failure" }
             val response = connection.inputStream.use { stream ->
                 val bytes = ByteArrayOutputStream()
@@ -65,14 +73,15 @@ class Exchange(private val context: Context, private val store: Store) {
             // Persist commands before forgetting acknowledgements. A crash may resend an acknowledgement,
             // but never loses it. Recovery rechecks the shade before any cancellation.
             val applied = store.ifCurrent(session) {
-                store.serverLive = !reply.dryRun
-                val incoming = Policy.liveQueue(reply.dismiss, reply.dryRun, store.liveAllowed)
+                if (!active()) return@ifCurrent
+                val incoming = reply.dismiss
                 store.pending = (store.pending + incoming).distinct()
                 store.clearOutcomes()
                 store.posted(capture.count)
                 if (ShadeListener.bound === capture.listener && capture.listener != null) resolvePending(capture.listener)
             }
             if (!applied) Posting.schedule(context)
+            return false
         } finally { connection.disconnect() }
     }
 
@@ -107,12 +116,13 @@ class Exchange(private val context: Context, private val store: Store) {
         for (command in pending) {
             val key = command.key
             check(ShadeListener.bound === listener && context.packageName in NotificationManagerCompat.getEnabledListenerPackages(context)) { "Notification access unavailable" }
+            check(active()) { "Send stopped" }
             val current = listener.activeNotifications.firstOrNull { it.key == key }
-            val status = when {
-                current == null -> if (command.identity in store.attempted) "dismissed" else "missing"
-                isProtected(current.packageName) || current.packageName !in store.noise -> "protected"
-                else -> {
-                    if (!store.liveAllowed || !store.serverLive) continue
+            val status = when (Policy.clearingAction(current != null, command.identity in store.attempted, store.paused)) {
+                ClearingAction.ACK_DISMISSED -> "dismissed"
+                ClearingAction.ACK_MISSING -> "missing"
+                ClearingAction.WAIT -> continue
+                ClearingAction.CANCEL -> {
                     store.attempted = store.attempted + command.identity
                     listener.cancelNotification(key)
                     // cancelNotification is asynchronous. Only acknowledge observed absence.
@@ -125,10 +135,8 @@ class Exchange(private val context: Context, private val store: Store) {
             store.pending = remaining
             store.attempted = store.attempted - command.identity
         }
-        if (pending.isNotEmpty()) Posting.schedule(context)
+        if (remaining.size < pending.size) Posting.schedule(context)
     }
-
-    private fun isProtected(pkg: String) = AppProtection(context, store).contains(pkg)
 
     private fun notification(sbn: StatusBarNotification): JSONObject {
         val extras = sbn.notification.extras
@@ -143,7 +151,7 @@ class Exchange(private val context: Context, private val store: Store) {
             extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString(),
             extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)?.joinToString("\n"), messages
         ).filterNotNull().filter { it.isNotEmpty() }.distinct().joinToString("\n")
-        val redacted = Policy.redact(sbn.packageName, title, text, store.extraAuthenticators, store.smsPackages)
+        val redacted = Policy.redact(sbn.packageName, title, text, store.extraAuthenticators)
         val appName = try { context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(sbn.packageName, 0)).toString() }
             catch (_: android.content.pm.PackageManager.NameNotFoundException) { sbn.packageName }
         check(sbn.key.length <= 1024 && sbn.packageName.length <= 255 && appName.length <= 512 && redacted.first.length <= 8192 && redacted.second.length <= 32768) { "Notification exceeds inbox field limit" }

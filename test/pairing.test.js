@@ -26,7 +26,7 @@ test("pairing requires a usable secure server address, not a local or credential
     "https://example.com/#secret", "https://example.com:0", "https://example.com\\path", " https://example.com", "ftp://example.com"]) {
     assert.throws(() => pairingPayload({ ...fixture, endpoint }), Error, endpoint);
   }
-  for (const endpoint of ["https://inbox.example.com", "http://inbox.example.ts.net:8787", "http://100.127.255.254:8787", "https://100.64.0.1:8787"]) {
+  for (const endpoint of ["https://inbox.example.com", "https://relay.example.ts.net:10000", "http://inbox.example.ts.net:8787", "http://100.127.255.254:8787", "https://100.64.0.1:8787"]) {
     assert.equal(JSON.parse(pairingPayload({ ...fixture, endpoint })).endpoint, endpoint);
   }
 });
@@ -44,6 +44,8 @@ test("pairing validates credentials, paired Access values and UTF-8 size before 
 });
 
 test("QR text round trips without losing Unicode or escaped credential characters", () => {
+  const funnel = JSON.parse(pairingPayload({ ...fixture, endpoint: "https://relay.example.ts.net:10000" }));
+  assert.deepEqual(funnel, { ...fixture, endpoint: "https://relay.example.ts.net:10000" });
   const payload = pairingPayload({ ...fixture, endpoint: "https://inbox.example.com", accessClientId: "fake-id",
     accessClientSecret: 'fake-quoted-"-unicode-é-secret' });
   const matrix = encodeQR(payload, "raw", { ecc: "medium", border: 4, scale: 4 });
@@ -78,6 +80,10 @@ test("CLI saves a private image without rotating credentials, leaking to logs or
   assert.match(again.stderr, /already exists/);
   assert.deepEqual(await readFile(join(directory, "pairing.gif")), image);
   assert.equal(await readFile(join(directory, ".dev.vars"), "utf8"), vars);
+  const funnel = run("--endpoint", "https://relay.example.ts.net:10000", "--output", "funnel.gif");
+  assert.equal(funnel.status, 0, funnel.stderr);
+  assert.doesNotMatch(funnel.stdout + funnel.stderr, /pairing-fixture-phone-token|fake-bot-secret-never-export/);
+  assert.match(run("--output", "pairing.png").stderr, /\.gif/);
 });
 
 test("CLI refuses noninteractive secret output, missing credentials and public HTTP", async t => {
