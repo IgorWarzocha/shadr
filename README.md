@@ -4,6 +4,8 @@ Let your bot read and clear your Android notifications without opening each app.
 
 The app sends your current notifications to a private inbox for your bot. Pair once with a QR code and grant notification access. No app-selection checklist or waiting period. **Pause bot clearing** keeps notifications on your phone while updates continue to send.
 
+Use it with Pi, Grokbot or any other agent that can make authenticated web requests and keep credentials private. There is no required AI provider or model. Your agent can use it on demand. Only scheduled routines need an agent or scheduler running at the chosen time.
+
 ## What you need
 
 - An Android phone running Android 8 or newer. Google Play services are not required.
@@ -52,5 +54,6 @@ For help, start with the app's status and your bot's connection check. If the ho
 - [Screenshots](screenshots/README.md)
 - [Hosting, pairing and recovery](docs/setup.md)
 - [Bot integration](docs/consumer.md)
+- [Agent skill](SKILL.md) for reading notifications, requesting clears and checking status
 - [Building, signing and testing Android](docs/android.md)
 - [API reference](docs/api.md)

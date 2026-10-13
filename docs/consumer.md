@@ -2,6 +2,14 @@
 
 The bot reads the latest phone snapshot, requests dismissals and checks health. It does not need the phone token. Read [SKILL.md](../SKILL.md) for operating rules and [the API contract](api.md) for JSON fields.
 
+## Use from Pi or another agent
+
+The repository's `SKILL.md` is the consumer skill. It uses ordinary HTTP requests, with no model-specific SDK or bot service. An agent needs an HTTP or command-execution tool and access to its private connection configuration.
+
+In Pi, ask the agent to read this checkout's `SKILL.md` and follow its linked references, then ask for your current notifications. Loading the file is enough to supply the instructions, but commissioning below must first configure the endpoint and bot credentials. Merely cloning this repository does not register the skill in Pi's global skill catalogue. Keep the linked documentation available rather than copying the skill file alone.
+
+The same instructions work with other capable agents. The relay can stay online while the agent is stopped. On-demand reads need no always-on agent, and scheduled routines use your agent's own scheduler.
+
 ## Commission the consumer
 
 1. Store the exact tested client origin, hosting mode and `BOT_TOKEN` privately on the consumer machine. Public HTTPS through Cloudflare or Tailscale Funnel is the default. Funnel requires bearer credentials only; the consumer and phone need internet, not Tailscale. For Cloudflare, also store its Access service credentials. The origin must not include a path. Restrict access to the bot's account and do not paste credentials into chat.
