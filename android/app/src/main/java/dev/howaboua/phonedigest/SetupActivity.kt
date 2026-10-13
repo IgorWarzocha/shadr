@@ -146,13 +146,24 @@ class SetupActivity : AppCompatActivity() {
             generation++
             pickPairing.launch("image/*")
         }
-        val manualToggle = button("Enter details manually", R.id.enter_manual) {}
+        val manualToggle = TextView(this).apply {
+            id = R.id.enter_manual
+            text = "Enter details manually"
+            textSize = 14f
+            setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorPrimary))
+            paintFlags = paintFlags or android.graphics.Paint.UNDERLINE_TEXT_FLAG
+            minimumHeight = dp(48)
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            isFocusable = true
+            isClickable = true
+        }
+        body.addView(manualToggle, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) })
         val manual = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         body.addView(manual)
         val parent = body; body = manual
-        val endpoint = field("Server address", store.endpoint, R.id.endpoint,
-            helper = "Include the port if needed. http:// or https:// is optional.", placeholder = "100.64.0.1:8787")
-        val token = field("Phone token", store.token, R.id.phone_token, true)
+        val (savedAddress, savedToken) = ConnectionDraft.manualPrefill(store.connection)
+        val endpoint = field("Server address", savedAddress, R.id.endpoint)
+        val token = field("Phone token", savedToken, R.id.phone_token, true)
         val connect = button("Connect", R.id.test_connection) {
             val draft = ConnectionDraft.manual(endpoint.text.toString(), token.text.toString(), store.connection, store.zone)
             connectDraft?.invoke(draft) {
@@ -230,18 +241,16 @@ class SetupActivity : AppCompatActivity() {
     private fun title(value: String) { text(value, 28f) }
     private fun text(value: String, size: Float = 16f) = TextView(this).apply { text = value; textSize = size; setPadding(0, dp(12), 0, dp(16)); body.addView(this) }
     private fun feedback() = text("").apply { id = R.id.feedback; visibility = View.GONE; accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
-    private fun field(label: String, value: String, viewId: Int, secret: Boolean = false, helper: String? = null, placeholder: String? = null): TextInputEditText {
+    private fun field(label: String, value: String, viewId: Int, secret: Boolean = false): TextInputEditText {
         val container = TextInputLayout(this).apply {
             hint = label
-            helperText = helper
-            placeholderText = placeholder
             if (secret) endIconMode = TextInputLayout.END_ICON_PASSWORD_TOGGLE
         }
         val edit = TextInputEditText(container.context).apply { id = viewId; setText(value); setSingleLine(); inputType = InputType.TYPE_CLASS_TEXT or if (secret) InputType.TYPE_TEXT_VARIATION_PASSWORD else InputType.TYPE_TEXT_VARIATION_URI; typeface = android.graphics.Typeface.DEFAULT }
         container.addView(edit); body.addView(container, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(16) }); return edit
     }
     private fun button(value: String, viewId: Int, action: () -> Unit) = MaterialButton(this).apply { id = viewId; text = value
-        if (viewId in setOf(R.id.back, R.id.settings, R.id.edit_connection, R.id.import_pairing, R.id.enter_manual, R.id.open_app_settings)) {
+        if (viewId in setOf(R.id.back, R.id.settings, R.id.edit_connection, R.id.import_pairing, R.id.open_app_settings)) {
             backgroundTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT)
             setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorPrimary))
             strokeWidth = dp(1); strokeColor = android.content.res.ColorStateList.valueOf(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOutline))

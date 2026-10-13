@@ -51,8 +51,8 @@ class ConnectionAttemptTest {
         }
         assertEquals("", PairingPayload.parse(qr, old.zone).accessSecret)
     }
-    @Test fun transportFailureSuggestsTailscaleOnlyForValidatedHttpTailnetIps() {
-        for (endpoint in listOf("http://100.64.0.1:8787", "http://100.127.255.255:8787")) {
+    @Test fun transportFailureSuggestsTailscaleOnlyForValidatedPrivateTailnetAddresses() {
+        for (endpoint in listOf("http://100.64.0.1:8787", "http://100.127.255.255:8787", "https://100.64.0.1", "https://100.127.255.255", "http://phone.example.ts.net", "http://PHONE.EXAMPLE.TS.NET:8787")) {
             val attempt = ConnectionAttempt(old.copy(mode = ConnectionMode.TAILNET, endpoint = endpoint, accessId = "", accessSecret = ""))
             val result = attempt.authenticate { throw java.net.ConnectException("private address") }
             assertEquals("Can't reach your server. Is Tailscale on and signed into the same account?", result.message)
@@ -67,7 +67,7 @@ class ConnectionAttemptTest {
             }
             assertFalse(attempt.authenticate { throw IllegalStateException() }.message.contains("Tailscale"))
         }
-        for (endpoint in listOf("https://example.com", "https://100.128.0.1", "https://100.63.255.255", "https://100.64.0.1", "http://phone.example.ts.net") +
+        for (endpoint in listOf("https://example.com", "https://100.128.0.1", "https://100.63.255.255", "https://phone.example.ts.net", "https://phone.example.ts.net:8443", "https://phone.example.ts.net:10000") +
             if (BuildConfig.DEBUG) listOf("http://127.0.0.1:8799") else emptyList()) {
             val attempt = ConnectionAttempt(old.copy(mode = ConnectionMode.infer(endpoint), endpoint = endpoint, accessId = "", accessSecret = ""))
             val result = attempt.authenticate { throw java.net.SocketTimeoutException() }
@@ -79,6 +79,15 @@ class ConnectionAttemptTest {
             val result = attempt.authenticate { contacted = true; throw java.net.ConnectException() }
             assertFalse(contacted)
             assertFalse(result.message.contains("Tailscale"))
+        }
+    }
+    @Test fun manualPrefillRetainsRealSettingsButDoesNotExposeLocalCaptureFixtures() {
+        assertEquals(old.endpoint to old.token, ConnectionDraft.manualPrefill(old))
+        val private = old.copy(endpoint = "http://100.64.0.1:8787")
+        assertEquals(private.endpoint to private.token, ConnectionDraft.manualPrefill(private))
+        assertEquals("" to "", ConnectionDraft.manualPrefill(old.copy(endpoint = "", token = "")))
+        for (endpoint in listOf("http://127.0.0.1:8799", "http://localhost:8799", "http://LOCALHOST:8799", "http://10.0.2.2:8799", "https://[::1]:8799")) {
+            assertEquals("" to "", ConnectionDraft.manualPrefill(old.copy(endpoint = endpoint, token = "capture-fixture")))
         }
     }
     @Test fun publicHttpsFunnelWorksFromQrAndManualWithBearerOnlyAndNoPhoneVpnAdvice() {

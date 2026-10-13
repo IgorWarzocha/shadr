@@ -4,8 +4,8 @@ These PNGs show the debug app on an Android 15 emulator with a Pixel 6 profile a
 
 | Files | Screen |
 | --- | --- |
-| `00-pairing-start-*.png` | QR-first setup with manual details hidden |
-| `01-connect-*.png` | Manual connection after opening the disclosure |
+| `00-pairing-start-*.png` | QR-first setup with a small manual-entry link |
+| `01-connect-*.png` | Empty manual form after following the link, without a port hint |
 | `02-notification-access-*.png` | Android permission handoff |
 | `03-done-*.png` | Setup complete |
 | `04-status-*.png` | Main screen after a successful send and cold launch |
@@ -52,7 +52,7 @@ Then run the captures from another terminal with `ANDROID_HOME` set:
 python3 scripts/capture-android.py --serial emulator-5556
 ```
 
-The script reproduces all 28 captures using ADB reverse on port 8799. It generates fake QR images with the CLI's encoder, using a debug-only loopback destination. The production CLI rejects loopback destinations. The script imports the images through Android's picker and checks both automatic connection and rejection without replacing saved credentials. Separate unreachable loopback and tailnet addresses exercise the general and Tailscale-specific error messages. Tailscale on the phone is only for the advanced private-hosting option, never the public HTTPS default.
+The script reproduces all 28 captures using ADB reverse on port 8799. It generates fake QR images with the CLI's encoder, using a debug-only loopback destination. The production CLI rejects loopback destinations. The script imports the images through Android's picker and checks both automatic connection and rejection without replacing saved credentials. It verifies that the manual form does not prefill fresh or retained loopback fixture settings. With networking disabled, a public HTTPS Funnel address produces plain server guidance, while a private tailnet IP and HTTP `.ts.net` address produce Tailscale guidance. Tailscale on the phone is only for the advanced private-hosting option, never the public HTTPS default.
 
 It also exercises manual connection, Android's camera permission and notification settings, then posts a harmless notification from a system package. Its event-driven upload, real bot dismissal and correlated phone-confirmed receipt go through the actual relay. Pausing must preserve uploads and prevent clearing, survive restart, then permit clearing when resumed. An OTP notification checks that code content is omitted before reaching the relay. Normal font size is restored after the 200% captures. Use `--theme light` or `--theme dark` to capture one theme.
 

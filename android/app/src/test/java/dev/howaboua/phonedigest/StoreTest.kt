@@ -25,6 +25,8 @@ class StoreTest {
     @Test fun freshPairingIsUnpausedAndPauseSurvivesRestartAndPairingAgain() {
         val prefs = MemoryPreferences()
         val store = Store(prefs)
+        assertEquals("", store.endpoint)
+        assertEquals("", store.token)
         assertFalse(store.paused)
         store.saveSettings(settings)
         assertFalse(Store(prefs).paused)

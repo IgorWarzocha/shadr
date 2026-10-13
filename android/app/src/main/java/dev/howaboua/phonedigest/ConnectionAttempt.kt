@@ -1,6 +1,11 @@
 package dev.howaboua.phonedigest
 
 object ConnectionDraft {
+    fun manualPrefill(previous: ConnectionSettings): Pair<String, String> {
+        val host = runCatching { java.net.URI(previous.endpoint).host?.lowercase() }.getOrNull()
+        return if (host in setOf("127.0.0.1", "localhost", "10.0.2.2", "::1", "[::1]")) "" to ""
+            else previous.endpoint to previous.token
+    }
     fun manual(address: String, token: String, previous: ConnectionSettings, zone: String): ConnectionSettings {
         val endpoint = ServerAddress.normalize(address)
         val sameEndpoint = endpoint.trimEnd('/') == previous.endpoint.trimEnd('/')
@@ -27,7 +32,8 @@ class ConnectionAttempt(val settings: ConnectionSettings) {
         val address = runCatching { java.net.URI(settings.endpoint) }.getOrNull()
         val host = address?.host.orEmpty()
         val tailnetIp = host.matches(Regex("[0-9]+(?:\\.[0-9]+){3}")) && Policy.isTailnet(host)
-        return if (address?.scheme == "http" && tailnetIp)
+        val privateHostname = address?.scheme == "http" && host.lowercase().endsWith(".ts.net")
+        return if (tailnetIp || privateHostname)
             "Can't reach your server. Is Tailscale on and signed into the same account?"
         else "Can't reach your inbox. Is your computer or server on?"
     }

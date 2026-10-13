@@ -156,6 +156,9 @@ for theme in (["light", "dark"] if args.theme == "both" else [args.theme]):
     if any(element.get("resource-id") in [APP + ":id/endpoint", APP + ":id/phone_token", APP + ":id/access_id", APP + ":id/access_secret"]
            and element.get("bounds") != "[0,0][0,0]" for element in hierarchy().iter("node")):
         raise RuntimeError("Initial pairing screen must hide manual and Access fields")
+    manual_link = node("enter_manual")
+    if manual_link.get("class") != "android.widget.TextView" or manual_link.get("clickable") != "true":
+        raise RuntimeError("Manual entry must use a secondary text link")
     capture("00-pairing-start", theme)
     tap("scan_pairing")
     tap("WHILE USING THE APP")
@@ -163,10 +166,14 @@ for theme in (["light", "dark"] if args.theme == "both" else [args.theme]):
     capture("11-camera-scan", theme)
     adb("shell", "input", "keyevent", "KEYCODE_BACK")
     tap("Enter details manually")
+    if node("endpoint").get("text") not in ["", "Server address"] or node("phone_token").get("text") not in ["", "Phone token"]:
+        raise RuntimeError("Fresh manual form must not prefill an address or token")
+    if any("Include the port" in element.get("text", "") for element in hierarchy().iter("node")):
+        raise RuntimeError("Manual form must not show the old port hint")
+    capture("01-connect", theme)
     enter("endpoint", "http://127.0.0.1:8799")
     enter("phone_token", "capture-only-phone-token")
     adb("shell", "input", "keyevent", "KEYCODE_BACK")
-    capture("01-connect", theme)
     tap("test_connection")
     node("allow_access")
     # QR import must reach the same next step automatically, with no form submit.
@@ -281,21 +288,28 @@ for theme in (["light", "dark"] if args.theme == "both" else [args.theme]):
     saved = {element.get("name"): element.text for element in preferences.findall("string")}
     if saved.get("endpoint") != "http://127.0.0.1:8799" or saved.get("token") != "capture-only-phone-token":
         raise RuntimeError("Failed QR replaced the saved connection")
-    replace("endpoint", "http://127.0.0.1:8798")
+    if node("endpoint").get("text") not in ["", "Server address"] or node("phone_token").get("text") not in ["", "Phone token"]:
+        raise RuntimeError("Retained loopback fixture settings must not prefill the manual form")
+    enter("phone_token", "capture-only-phone-token")
     adb("shell", "input", "keyevent", "KEYCODE_BACK")
-    tap("test_connection")
-    wait_feedback("Can't reach your inbox")
-    capture("08-inbox-unreachable", theme)
-    replace("endpoint", "http://100.64.0.1:8787")
-    adb("shell", "input", "keyevent", "KEYCODE_BACK")
-    # Force an unreachable address on the emulator, without contacting any real
-    # tailnet device that might happen to use this documentation address.
+    # Offline failures test guidance without contacting any public or tailnet host.
     try:
         adb("shell", "svc", "wifi", "disable")
         adb("shell", "svc", "data", "disable")
+        replace("endpoint", "https://relay.example.ts.net:10000")
+        adb("shell", "input", "keyevent", "KEYCODE_BACK")
+        tap("test_connection")
+        wait_feedback("Can't reach your inbox. Is your computer or server on?")
+        capture("08-inbox-unreachable", theme)
+        replace("endpoint", "http://100.64.0.1:8787")
+        adb("shell", "input", "keyevent", "KEYCODE_BACK")
         tap("test_connection")
         wait_feedback("Can't reach your server. Is Tailscale on and signed into the same account?")
         capture("12-tailscale-unreachable", theme)
+        replace("endpoint", "http://relay.example.ts.net:8787")
+        adb("shell", "input", "keyevent", "KEYCODE_BACK")
+        tap("test_connection")
+        wait_feedback("Can't reach your server. Is Tailscale on and signed into the same account?")
     finally:
         adb("shell", "svc", "wifi", "enable")
         adb("shell", "svc", "data", "enable")
