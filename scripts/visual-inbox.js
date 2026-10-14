@@ -8,8 +8,13 @@ import { Miniflare } from "miniflare";
 import { parseArgs } from "node:util";
 import { readSettings } from "./client-settings.js";
 import { pushConfigured } from "../src/push.js";
+import { isTailnetAddress } from "../src/local-network.js";
 
-const { values } = parseArgs({ options: { "push-config": { type: "string" } } });
+const { values } = parseArgs({ options: { "push-config": { type: "string" }, bind: { type: "string", default: "127.0.0.1" } } });
+const bind = values.bind;
+if (bind !== "127.0.0.1" && !isTailnetAddress(bind)) {
+  throw new Error("Capture fixture must bind loopback or a private tailnet IPv4 address.");
+}
 const push = values["push-config"] ? await readSettings(values["push-config"], { secret: true }) : {};
 if (values["push-config"] && !pushConfigured(push)) throw new Error("Invalid Firebase configuration for push validation.");
 const pushBindings = Object.fromEntries(["FCM_ANDROID_CONFIG", "FCM_SERVICE_ACCOUNT"]
@@ -56,9 +61,9 @@ try {
   });
   await new Promise((accept, reject) => {
     server.once("error", reject);
-    server.listen(8799, "127.0.0.1", accept);
+    server.listen(8799, bind, accept);
   });
-  console.log(`Real relay on loopback port 8799 with disposable D1 and fake bearer credentials. Firebase push ${values["push-config"] ? "enabled" : "not configured"}.`);
+  console.log(`Real relay on private port 8799 with disposable D1 and fake bearer credentials. Firebase push ${values["push-config"] ? "enabled" : "not configured"}.`);
 } catch (error) {
   server?.close();
   await runtime.dispose();

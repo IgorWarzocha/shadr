@@ -1,9 +1,10 @@
-"""Exercise the debug app on an emulator and capture real light/dark screens.
+"""Capture the signed release on an emulator in light and dark themes.
 
 Start scripts/visual-inbox.js first. This deliberately clears app data on the
 selected emulator and uses only the fixture's public, fake credentials.
 """
 import argparse
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ import subprocess
 import tempfile
 import time
 import urllib.request
+from urllib.parse import urlparse
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +22,7 @@ APP = "dev.howaboua.phonedigest"
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--serial", default="emulator-5556")
 parser.add_argument("--theme", choices=["light", "dark", "both"], default="both")
+parser.add_argument("--verify-delivery", action="store_true", help="Also verify real FCM, Doze, idle uploads, pause and code omission")
 args = parser.parse_args()
 if not args.serial.startswith("emulator-"):
     raise SystemExit("Capture refuses physical devices: it clears emulator app data.")
@@ -27,13 +30,19 @@ sdk = Path(os.environ.get("ANDROID_HOME", ROOT / "android/.toolchain/sdk"))
 ADB = [str(sdk / "platform-tools/adb"), "-s", args.serial]
 OUT = ROOT / "screenshots"
 OUT.mkdir(exist_ok=True)
+INBOX = os.environ.get("CAPTURE_INBOX_URL", "")
+address = urlparse(INBOX)
+if (address.scheme != "http" or address.port != 8799 or address.path or address.query or address.fragment
+        or address.username or address.password or not address.hostname
+        or ipaddress.ip_address(address.hostname) not in ipaddress.ip_network("100.64.0.0/10")):
+    raise SystemExit("CAPTURE_INBOX_URL must name the disposable fixture's private tailnet IPv4 address on port 8799.")
 
 
-def adb(*arguments, binary=False):
+def adb(*arguments):
     if arguments and arguments[0] == "shell":
         # ADB joins shell arguments without preserving host-side argv quoting.
         arguments = ("shell", shlex.join(arguments[1:]))
-    return subprocess.check_output(ADB + list(arguments), timeout=30, text=not binary)
+    return subprocess.check_output(ADB + list(arguments), timeout=30, text=True)
 
 
 def hierarchy():
@@ -78,20 +87,31 @@ def replace(identifier, value):
 def capture(name, theme):
     # Settle insets, keyboard transitions and password-character masking.
     time.sleep(2)
-    (OUT / (name + "-" + theme + ".png")).write_bytes(adb("exec-out", "screencap", "-p", binary=True))
+    # Emulator-console framebuffer capture is outside Android's screenshot API.
+    # The signed APK retains FLAG_SECURE and is not modified for this workflow.
+    with tempfile.TemporaryDirectory(prefix="phone-inbox-frame-") as directory:
+        adb("emu", "screenrecord", "screenshot", directory)
+        frames = list(Path(directory).glob("*.png"))
+        if len(frames) != 1:
+            raise RuntimeError("Emulator did not produce exactly one screenshot")
+        (OUT / (name + "-" + theme + ".png")).write_bytes(frames[0].read_bytes())
+    print("Captured", name, theme, flush=True)
 
 
 def fresh_start(theme):
+    if "DEBUGGABLE" in adb("shell", "dumpsys", "package", APP):
+        raise RuntimeError("Capture requires the installed signed release, not a debug APK")
     adb("shell", "settings", "put", "system", "font_scale", "1.0")
     adb("shell", "am", "force-stop", APP)
     adb("shell", "cmd", "notification", "disallow_listener", APP + "/.ShadeListener")
     adb("shell", "pm", "clear", APP)
     adb("shell", "cmd", "uimode", "night", "no" if theme == "light" else "yes")
-    adb("reverse", "tcp:8799", "tcp:8799")
     # Permission and theme changes can finish the old task asynchronously.
     time.sleep(1)
     adb("shell", "am", "start", "-W", "-n", APP + "/.SetupActivity")
     node("scan_pairing")
+    if "SECURE" not in adb("shell", "dumpsys", "window", "windows"):
+        raise RuntimeError("Release capture requires the secure app window")
 
 
 def import_qr(filename):
@@ -122,7 +142,7 @@ def cold_launch():
 
 
 def relay(path="/notifications", data=None):
-    request = urllib.request.Request("http://127.0.0.1:8799" + path,
+    request = urllib.request.Request(INBOX + path,
         data=None if data is None else json.dumps(data).encode(),
         headers={"Authorization": "Bearer capture-only-bot-token", "Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=20) as response:
@@ -176,12 +196,12 @@ def background_clear(doze):
         adb("shell", "am", "start", "-W", "-n", APP + "/.SetupActivity")
 
 
-# The same encoder as the CLI, with a debug-only loopback destination. The
-# production CLI deliberately rejects loopback because it points at the phone.
+# The CLI encoder with fake pairing credentials for the disposable relay.
+# Release endpoint validation is unchanged.
 with tempfile.TemporaryDirectory(prefix="phone-inbox-capture-") as directory:
     for filename, token in [("phone-inbox-fixture.gif", "capture-only-phone-token"),
                             ("phone-inbox-rejected.gif", "wrong-capture-token")]:
-        payload = {"type": "phone-inbox", "version": 1, "endpoint": "http://127.0.0.1:8799", "phoneToken": token}
+        payload = {"type": "phone-inbox", "version": 1, "endpoint": INBOX, "phoneToken": token}
         encoded = subprocess.check_output(["node", "--input-type=module", "-e",
             "import qr from 'qr'; import {readFileSync} from 'node:fs'; process.stdout.write(qr(readFileSync(0,'utf8'),'gif',{ecc:'medium',border:4,scale:6}));"],
             input=json.dumps(payload).encode(), cwd=ROOT, timeout=30)
@@ -204,12 +224,12 @@ for theme in (["light", "dark"] if args.theme == "both" else [args.theme]):
     capture("11-camera-scan", theme)
     adb("shell", "input", "keyevent", "KEYCODE_BACK")
     tap("Enter details manually")
-    if node("endpoint").get("text") not in ["", "Server address"] or node("phone_token").get("text") not in ["", "Phone token"]:
+    if node("endpoint").get("text") not in ["", "Inbox address"] or node("phone_token").get("text") not in ["", "Pairing code"]:
         raise RuntimeError("Fresh manual form must not prefill an address or token")
     if any("Include the port" in element.get("text", "") for element in hierarchy().iter("node")):
         raise RuntimeError("Manual form must not show the old port hint")
     capture("01-connect", theme)
-    enter("endpoint", "http://127.0.0.1:8799")
+    enter("endpoint", INBOX)
     enter("phone_token", "capture-only-phone-token")
     adb("shell", "input", "keyevent", "KEYCODE_BACK")
     tap("test_connection")
@@ -238,16 +258,16 @@ for theme in (["light", "dark"] if args.theme == "both" else [args.theme]):
     adb("shell", "input", "keyevent", "KEYCODE_BACK")
     adb("shell", "cmd", "notification", "allow_listener", APP + "/.ShadeListener")
     node("allow_service_notifications")
-    # Before granting permission, a registered token must not create an upload loop.
+    # Allow token registration to settle before the permission-step capture.
     time.sleep(10)
     capture("14-bot-requests", theme)
-    before = relay("/health")["sequence"]
-    time.sleep(20)
-    if relay("/health")["sequence"] != before:
-        raise RuntimeError("Idle phone uploaded repeatedly with status notifications disabled")
+    if args.verify_delivery:
+        before = relay("/health")["sequence"]
+        time.sleep(20)
+        if relay("/health")["sequence"] != before:
+            raise RuntimeError("Idle phone uploaded repeatedly with status notifications disabled")
     tap("allow_service_notifications")
     tap("Allow")
-    tap("retry_push")
     node("continue_setup")
     capture("03-done", theme)
     tap("continue_setup")
@@ -255,19 +275,15 @@ for theme in (["light", "dark"] if args.theme == "both" else [args.theme]):
         raise RuntimeError("Clearing must work by default after pairing")
     title = "Delivery update " + theme
     adb("shell", "cmd", "notification", "post", "-t", title, "capture-fixture", "Your parcel is ready.")
-    # An event sends immediately without the former one-minute delay or Send now.
+    # Use fake notification content to settle the connected-status copy.
     shade = wait_shade(lambda shade: any(item["title"] == title for item in shade["notifications"]),
                        "The notification event did not send promptly")
     if shade["status"]["state"] != "ok":
         raise RuntimeError("Notification access did not produce a ready phone snapshot")
-    item = next(item for item in shade["notifications"] if item["title"] == title)
-    # com.android.shell is a system app. It must be clearable without an allowlist.
-    queued = relay("/dismiss", {"keys": [item["key"]], "reason": "capture verification"})
-    if queued["queued"] != [item["key"]] or queued["dryRun"]:
-        raise RuntimeError("A new pairing could not queue a real dismissal immediately")
-    request_id = queued["requestIds"][item["key"]]
-    receipt(request_id)
-    if theme == "light":
+    if args.verify_delivery:
+        item = next(item for item in shade["notifications"] if item["title"] == title)
+        queued = relay("/dismiss", {"keys": [item["key"]], "reason": "capture verification"})
+        receipt(queued["requestIds"][item["key"]])
         background_clear(False)
         background_clear(True)
         adb("shell", "input", "keyevent", "KEYCODE_HOME")
@@ -276,7 +292,6 @@ for theme in (["light", "dark"] if args.theme == "both" else [args.theme]):
         time.sleep(30)
         if relay("/health")["sequence"] != before:
             raise RuntimeError("Idle phone uploaded without a notification or command")
-        print("Idle registration and ready-phone upload checks passed", flush=True)
     # Granted access must survive a cold launch while the listener rebinds.
     cold_launch()
     node("post_now")
@@ -294,22 +309,23 @@ for theme in (["light", "dark"] if args.theme == "both" else [args.theme]):
     if node("pause_clearing").get("checked") != "true":
         raise RuntimeError("Pause was not enabled")
     capture("06-paused", theme)
-    # Pausing must preserve uploads and hold cancellation, including across restart.
+    # Verify the displayed pause choice survives a restart.
     cold_launch()
     if node("pause_clearing").get("checked") != "true":
         raise RuntimeError("Pause did not survive a cold launch")
-    paused_title = "Keep this notification " + theme
-    adb("shell", "cmd", "notification", "post", "-t", paused_title, "capture-paused", "Only clear after resuming.")
-    shade = wait_shade(lambda shade: any(item["title"] == paused_title for item in shade["notifications"]),
-                       "Pausing clearing incorrectly stopped uploads")
-    paused_key = next(item["key"] for item in shade["notifications"] if item["title"] == paused_title)
-    relay("/dismiss", {"keys": [paused_key], "reason": "pause verification"})
-    paused_request_id = next(entry["requestId"] for entry in relay()["pending"] if entry["key"] == paused_key)
-    received = relay()["receivedAt"]
-    tap("post_now")
-    held = wait_shade(lambda shade: shade["receivedAt"] != received, "Paused phone did not exchange")
-    if not any(item["key"] == paused_key for item in held["notifications"]):
-        raise RuntimeError("Paused notification was cleared")
+    if args.verify_delivery:
+        paused_title = "Keep this notification " + theme
+        adb("shell", "cmd", "notification", "post", "-t", paused_title, "capture-paused", "Only clear after resuming.")
+        shade = wait_shade(lambda value: any(item["title"] == paused_title for item in value["notifications"]),
+                           "Pausing clearing incorrectly stopped uploads")
+        paused_key = next(item["key"] for item in shade["notifications"] if item["title"] == paused_title)
+        queued = relay("/dismiss", {"keys": [paused_key], "reason": "pause verification"})
+        paused_request_id = queued["requestIds"][paused_key]
+        received = relay()["receivedAt"]
+        tap("post_now")
+        held = wait_shade(lambda value: value["receivedAt"] != received, "Paused phone did not exchange")
+        if not any(item["key"] == paused_key for item in held["notifications"]):
+            raise RuntimeError("Paused notification was cleared")
     try:
         adb("shell", "settings", "put", "system", "font_scale", "2.0")
         cold_launch()
@@ -319,16 +335,15 @@ for theme in (["light", "dark"] if args.theme == "both" else [args.theme]):
         adb("shell", "settings", "put", "system", "font_scale", "1.0")
     cold_launch()
     tap("pause_clearing")
-    tap("post_now")
-    receipt(paused_request_id)
-    # Real notification extras traverse the phone's OTP filter before this relay.
-    otp_tag = "capture-otp-" + theme
-    adb("shell", "cmd", "notification", "post", "-t", "Verification code", otp_tag, "Your OTP is AB7X92.")
-    redacted = wait_shade(lambda shade: any(otp_tag in item["key"] for item in shade["notifications"]),
-                          "OTP notification metadata did not reach the relay")
-    otp = next(item for item in redacted["notifications"] if otp_tag in item["key"])
-    if "AB7X92" in otp["title"] + otp["text"] or "Your OTP" in otp["text"]:
-        raise RuntimeError("OTP content reached the relay")
+    if args.verify_delivery:
+        receipt(paused_request_id)
+        otp_tag = "capture-otp-" + theme
+        adb("shell", "cmd", "notification", "post", "-t", "Verification code", otp_tag, "Your OTP is AB7X92.")
+        redacted = wait_shade(lambda value: any(otp_tag in item["key"] for item in value["notifications"]),
+                             "OTP notification metadata did not reach the relay")
+        otp = next(item for item in redacted["notifications"] if otp_tag in item["key"])
+        if "AB7X92" in otp["title"] + otp["text"] or "Your OTP" in otp["text"]:
+            raise RuntimeError("OTP content reached the relay")
     tap("settings")
     capture("05-settings", theme)
     tap("edit_connection")
@@ -341,14 +356,6 @@ for theme in (["light", "dark"] if args.theme == "both" else [args.theme]):
     tap("settings")
     tap("edit_connection")
     tap("Enter details manually")
-    preferences = ET.fromstring(adb("shell", "run-as", APP, "cat", "shared_prefs/inbox.xml"))
-    saved = {element.get("name"): element.text for element in preferences.findall("string")}
-    if saved.get("endpoint") != "http://127.0.0.1:8799" or saved.get("token") != "capture-only-phone-token":
-        raise RuntimeError("Failed QR replaced the saved connection")
-    if node("endpoint").get("text") not in ["", "Server address"] or node("phone_token").get("text") not in ["", "Phone token"]:
-        raise RuntimeError("Retained loopback fixture settings must not prefill the manual form")
-    enter("phone_token", "capture-only-phone-token")
-    adb("shell", "input", "keyevent", "KEYCODE_BACK")
     # Offline failures test guidance without contacting any public or tailnet host.
     try:
         adb("shell", "svc", "wifi", "disable")
@@ -358,16 +365,12 @@ for theme in (["light", "dark"] if args.theme == "both" else [args.theme]):
         tap("test_connection")
         wait_feedback("Can't reach your inbox. Is your computer or server on?")
         capture("08-inbox-unreachable", theme)
-        replace("endpoint", "http://100.64.0.1:8787")
-        adb("shell", "input", "keyevent", "KEYCODE_BACK")
-        tap("test_connection")
-        wait_feedback("Can't reach your server. Is Tailscale on and signed into the same account?")
-        capture("12-tailscale-unreachable", theme)
         replace("endpoint", "http://relay.example.ts.net:8787")
         adb("shell", "input", "keyevent", "KEYCODE_BACK")
         tap("test_connection")
         wait_feedback("Can't reach your server. Is Tailscale on and signed into the same account?")
+        capture("12-tailscale-unreachable", theme)
     finally:
         adb("shell", "svc", "wifi", "enable")
         adb("shell", "svc", "data", "enable")
-    print("Captured", theme, "automatic pairing, real clearing, pause, OTP omission and plain errors.")
+    print("Captured signed release", theme, "pairing, permission handoffs, status, pause and plain errors.")
