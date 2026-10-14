@@ -20,8 +20,8 @@ class ShadeListener : NotificationListenerService() {
         requestRebind(android.content.ComponentName(this, ShadeListener::class.java))
     }
     override fun onDestroy() { if (bound === this) bound = null; super.onDestroy() }
-    override fun onNotificationPosted(sbn: StatusBarNotification) { if (!CommandNotice.isOperational(this, sbn)) changed() }
-    override fun onNotificationRemoved(sbn: StatusBarNotification) { if (!CommandNotice.isOperational(this, sbn)) changed() }
+    override fun onNotificationPosted(sbn: StatusBarNotification) { if (sbn.packageName !in Store(this).excludedApps && !CommandNotice.isOperational(this, sbn)) changed() }
+    override fun onNotificationRemoved(sbn: StatusBarNotification) { if (sbn.packageName !in Store(this).excludedApps && !CommandNotice.isOperational(this, sbn)) changed() }
     private fun changed() { observed(); Posting.schedule(this) }
     private fun observed() { Store(this).lastListenerAt = Instant.now().toString() }
 }

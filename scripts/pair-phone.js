@@ -64,7 +64,7 @@ export async function pairPhone(args = process.argv.slice(2)) {
     accessClientId: credentials.ACCESS_CLIENT_ID, accessClientSecret: credentials.ACCESS_CLIENT_SECRET });
   if (values.output) {
     await writePrivate(values.output, encodeQR(payload, "gif", { ...qrOptions, scale: 6 }));
-    console.log("Saved a private pairing QR. Open it locally, then use Scan QR or Import QR image in Phone inbox.\nIt contains your phone credentials. Do not post it publicly. Delete it when finished.");
+    console.log("Saved a private pairing QR. Open it locally, then use Scan QR or Import QR image in shadr.\nIt contains your phone credentials. Do not post it publicly. Delete it when finished.");
   } else {
     const qr = encodeQR(payload, "term", qrOptions);
     // Wrapping a QR changes its geometry and makes it unreadable.
@@ -72,7 +72,7 @@ export async function pairPhone(args = process.argv.slice(2)) {
     if (process.stdout.columns && process.stdout.columns < width) {
       throw new Error(`Widen this terminal to at least ${width} columns, or use --output private.gif.`);
     }
-    console.log("Private pairing QR. Anyone who can scan this receives your phone credentials.\nIn Phone inbox, choose Scan QR. The app will check the connection and connect automatically.");
+    console.log("Private pairing QR. Anyone who can scan this receives your phone credentials.\nIn shadr, choose Scan QR. The app will check the connection and connect automatically.");
     console.log(qr);
   }
 }

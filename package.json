@@ -1,5 +1,5 @@
 {
-  "name": "phone-digest",
+  "name": "shadr",
   "private": true,
   "type": "module",
   "engines": { "node": ">=22" },

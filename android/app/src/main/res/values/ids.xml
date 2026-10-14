@@ -1,4 +1,7 @@
 <resources>
+    <item name="excluded_apps" type="id" />
+    <item name="app_search" type="id" />
+    <item name="save_exclusions" type="id" />
     <item name="endpoint" type="id" />
     <item name="phone_token" type="id" />
     <item name="pause_clearing" type="id" />

@@ -4,7 +4,7 @@ const actions = {
   phone_offline: "Check the phone connection.",
   phone_idle: "The phone is quiet; a new action needs phone confirmation.",
   notification_access_revoked: "Enable notification access on the phone.",
-  phone_not_ready: "Open Phone inbox and check its status.",
+  phone_not_ready: "Open shadr and check its status.",
 };
 
 export function health(device, now = new Date(), pushReady = false) {

@@ -23,13 +23,13 @@ export async function serveApk({ apk, host, port }) {
     server = createServer((request, response) => {
       response.setHeader("Cache-Control", "no-store");
       response.setHeader("X-Content-Type-Options", "nosniff");
-      if (request.url !== "/phone-inbox.apk" || !["GET", "HEAD"].includes(request.method)) {
+      if (request.url !== "/shadr.apk" || !["GET", "HEAD"].includes(request.method)) {
         response.writeHead(404, { "Content-Type": "text/plain" });
         response.end("Not found");
         return;
       }
       response.writeHead(200, { "Content-Type": "application/vnd.android.package-archive",
-        "Content-Disposition": 'attachment; filename="phone-inbox.apk"', "Content-Length": info.size });
+        "Content-Disposition": 'attachment; filename="shadr.apk"', "Content-Length": info.size });
       if (request.method === "HEAD") { response.end(); return; }
       pipeline(file.createReadStream({ start: 0, end: info.size - 1, autoClose: false }), response, () => {
         // Client cancellation closes only its stream, never the shared APK descriptor.
@@ -56,7 +56,7 @@ async function main() {
   const { values } = parseArgs({ options: { apk: { type: "string" }, bind: { type: "string" },
     port: { type: "string", default: "8788" }, help: { type: "boolean" } } });
   if (values.help) {
-    console.log("Usage: npm run apk:serve -- [--apk path/to/signed.apk] [--bind tailnetIPv4] [--port 8788]\nServes only /phone-inbox.apk, never the checkout or credentials. Stop with Ctrl+C.\nDefaults to the locally built signed release APK. No debug fallback.");
+    console.log("Usage: npm run apk:serve -- [--apk path/to/signed.apk] [--bind tailnetIPv4] [--port 8788]\nServes only /shadr.apk, never the checkout or credentials. Stop with Ctrl+C.\nDefaults to the locally built signed release APK. No debug fallback.");
     return;
   }
   const root = fileURLToPath(new URL("../", import.meta.url));
@@ -66,7 +66,7 @@ async function main() {
   if (!/^\d+$/.test(values.port) || Number(values.port) < 1 || Number(values.port) > 65535) throw new Error("Choose a download port between 1 and 65535.");
   const apk = values.apk ? resolve(values.apk) : resolve(root, "android/app/build/outputs/apk/release/app-release.apk");
   const running = await serveApk({ apk, host, port: Number(values.port) });
-  console.log(`Download: http://${host}:${values.port}/phone-inbox.apk\nSHA-256: ${running.sha256}\nOnly the APK is shared. Stop this download server when installation is complete.`);
+  console.log(`Download: http://${host}:${values.port}/shadr.apk\nSHA-256: ${running.sha256}\nOnly the APK is shared. Stop this download server when installation is complete.`);
   let closing = false;
   const stop = async () => {
     if (closing) return;

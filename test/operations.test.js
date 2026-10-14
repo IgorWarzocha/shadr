@@ -19,16 +19,16 @@ test("APK download serves only the selected artifact, supports repeat requests a
   t.after(() => running.close());
   const base = `http://127.0.0.1:${running.server.address().port}`;
   assert.equal(running.sha256, createHash("sha256").update(content).digest("hex"));
-  for (const path of ["/", "/.dev.vars", "/../.dev.vars", "/phone-inbox.apk?other=.dev.vars"]) {
+  for (const path of ["/", "/.dev.vars", "/../.dev.vars", "/shadr.apk?other=.dev.vars"]) {
     assert.equal((await fetch(base + path)).status, 404);
   }
   for (let i = 0; i < 2; i++) {
-    const result = await fetch(base + "/phone-inbox.apk");
+    const result = await fetch(base + "/shadr.apk");
     assert.equal(result.headers.get("content-type"), "application/vnd.android.package-archive");
     assert.equal(result.headers.get("cache-control"), "no-store");
     assert.deepEqual(Buffer.from(await result.arrayBuffer()), content);
   }
-  const head = await fetch(base + "/phone-inbox.apk", { method: "HEAD" });
+  const head = await fetch(base + "/shadr.apk", { method: "HEAD" });
   assert.equal(head.headers.get("content-length"), String(content.length));
   assert.equal(await head.text(), "");
 });

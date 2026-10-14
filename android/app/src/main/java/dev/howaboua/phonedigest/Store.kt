@@ -12,7 +12,26 @@ data class ClearAttempt(val startedAt: Long, val tries: Int)
 enum class PostState { IDLE, POSTED, FAILED }
 
 class Store(private val prefs: SharedPreferences) {
-    companion object { internal val stateLock = Any() }
+    companion object {
+        internal val stateLock = Any()
+    }
+    val excludedApps: Set<String> get() = prefs.getStringSet("excludedApps", emptySet())!!.toSet()
+    val privacyRevision: Long get() = prefs.getLong("privacyRevision", 0)
+    fun saveExcludedApps(packages: Set<String>) = synchronized(AppPrivacy.uploadLock) {
+        synchronized(stateLock) save@{
+            if (packages == excludedApps) return@save
+            val kept = pending.filterNot { AppPrivacy.excludesKey(it.key, packages) }
+            val identities = kept.map { it.identity }.toSet()
+            val attempts = JSONObject(prefs.getString("attemptInfo", "{}")!!)
+            attempts.keys().asSequence().toList().filterNot { it in identities }.forEach(attempts::remove)
+            check(prefs.edit().putStringSet("excludedApps", packages.toSet())
+                .putLong("privacyRevision", privacyRevision + 1)
+                .putString("outcomes", AppPrivacy.outcomes(outcomes(), packages).toString())
+                .putString("pending", Protocol.encode(kept).toString())
+                .putStringSet("attempted", attempted.intersect(identities))
+                .putString("attemptInfo", attempts.toString()).commit())
+        }
+    }
     fun session(): ConnectionSession = synchronized(stateLock) { ConnectionSession(connection, prefs.getLong("connectionRevision", 0)) }
     fun ifCurrent(session: ConnectionSession, action: () -> Unit): Boolean = synchronized(stateLock) {
         if (session.revision != prefs.getLong("connectionRevision", 0)) false else { action(); true }

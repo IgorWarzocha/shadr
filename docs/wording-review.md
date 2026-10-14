@@ -1,5 +1,7 @@
 # App wording for approval
 
+This records the v0.7 wording changes, before the app was renamed shadr and app privacy exclusions were added. The table preserves the strings reviewed at that point.
+
 Use **assistant** throughout the app. Protocol names such as `BOT_TOKEN`, the `bot` role and `bot.env` are unchanged.
 
 Keep manual sending as a recovery action after a connection problem or setup change. Notifications are normally sent automatically. The button now says exactly what it sends and to whom.

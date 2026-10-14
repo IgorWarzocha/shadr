@@ -1,6 +1,6 @@
-# Phone inbox for Android
+# shadr for Android
 
-The phone sends its current notifications to your inbox and lets assistants clear them. Private message previews are included, except content identified as authentication codes. After pairing and notification access, sending and clearing work without an app-selection step or waiting period. Android may refuse to clear some ongoing notifications.
+The phone sends its shared notifications to your inbox and lets assistants clear them. **Excluded apps** keeps selected apps' notifications entirely on the phone. Other private message previews are included, except content identified as authentication codes. After pairing and notification access, sending and clearing work without mandatory app selection or a waiting period. Android may refuse to clear some ongoing notifications.
 
 ## Validate and build a release
 
@@ -37,7 +37,7 @@ Before distribution, verify the signature and confirm the manifest does not repo
 
 The production signing certificate's SHA-256 fingerprint is `7fdeda42c1bb13c2ad4dc0010e11a73da53ca6406b1a9dc86109314e319a638a`. This public fingerprint identifies the release key, not the changing APK file hash.
 
-Publish the verified signed APK as `phone-inbox.apk` on a GitHub Release tied to the tested source tag. Include its SHA-256 checksum and any upgrade instructions. Download the published asset and compare its checksum before handing out the link. Never publish the keystore, private signing environment, debug APK or unsigned APK. Losing the release key prevents future updates under the same signing identity.
+Publish the verified signed APK as `shadr.apk` on a GitHub Release tied to the tested source tag. Include its SHA-256 checksum and any upgrade instructions. Download the published asset and compare its checksum before handing out the link. Never publish the keystore, private signing environment, debug APK or unsigned APK. Losing the release key prevents future updates under the same signing identity.
 
 ### Capture the release on an emulator
 
@@ -62,10 +62,10 @@ Pairing QR codes contain your phone credentials. Keep the QR and any saved image
 The normal connection uses a public HTTPS address, served through Cloudflare or Tailscale Funnel on an always-on computer or server. Your phone does not need Tailscale for either public option. A Funnel address such as `https://relay.example.ts.net:10000` works directly over the internet with your phone token; it does not need Cloudflare Access details.
 
 1. Choose **Scan QR** to scan the code shown on your computer, or **Import QR image** to select a saved QR screenshot. The app checks the connection automatically and continues when your inbox accepts it. A failed connection leaves any existing settings unchanged.
-2. Allow **Phone inbox** in Android's notification access settings. Return and complete **Let your assistant clear notifications**, including permission for brief, silent processing notifications. No permanent foreground notification or battery-exemption step is required.
+2. Before allowing notification access, open **Excluded apps** if there are apps you want to keep private. Then allow **shadr** in Android's notification access settings. Return and complete **Let your assistant clear notifications**, including permission for brief, silent processing notifications. No permanent foreground notification or battery-exemption step is required.
 3. The main screen shows the connection, **Last sent** and whether notifications can be cleared. **Send latest notifications to your assistant** sends the current notifications to your inbox.
 
-On Android 13 and newer, a sideloaded app may show **App was denied access**. Choose **Open app settings**, then open **⋮ > Allow restricted settings** under **Settings > Apps > Phone inbox**. Return to notification access settings and enable **Phone inbox**. The app offers these instructions while access is missing; it cannot detect every manufacturer's restriction or grant access for you.
+On Android 13 and newer, a sideloaded app may show **App was denied access**. Choose **Open app settings**, then open **⋮ > Allow restricted settings** under **Settings > Apps > shadr**. Return to notification access settings and enable **shadr**. The app offers these instructions while access is missing; it cannot detect every manufacturer's restriction or grant access for you.
 
 If you need to type the settings, choose **Enter details manually**, enter the **Inbox address** and **Pairing code**, then press **Connect**. Do not append `/notifications`. Include `https://` for a public Funnel `.ts.net` address: a hostname alone cannot distinguish Funnel from a private tailnet service. Explicit schemes and ports are preserved. Cloudflare Access details, when needed, come from the QR code rather than extra phone fields. Existing hidden credentials are retained only for the exact same endpoint, never copied to a changed address.
 
@@ -75,7 +75,9 @@ Private tailnet-only access is an advanced alternative. Only this option needs T
 
 **Pause assistant clearing** on the main screen is off by default. Turn it on to stop new clearing actions; notifications still send. The choice saves immediately and survives restarts, upgrades and pairing again. **Settings > Connection** lets you connect to a different inbox. The app uses your phone's current system time zone, including after travel.
 
-Upgrades retain credentials, pending acknowledgements and any explicitly saved pause. Former app-selection, package-protection, waiting-period and clearing-enable preferences are removed. Stored authenticator overrides remain only to suppress secret content, not to prevent clearing. The application identity is unchanged. `adb install -r` upgrades an existing installation only when both APKs use the same signing key.
+Upgrades retain credentials, pending acknowledgements, saved exclusions and any explicitly saved pause. Legacy clearing-only app-selection, package-protection, waiting-period and clearing-enable preferences are removed; they are not privacy exclusions. Stored authenticator overrides remain only to suppress secret content, not to prevent clearing. The application identity is unchanged. `adb install -r` upgrades an existing installation only when both APKs use the same signing key.
+
+The shadr name does not change the existing `dev.howaboua.phonedigest` application ID, signing certificate, pairing format or private configuration paths. Existing Phone inbox installations upgrade in place without re-pairing. Relay service identifiers also stay unchanged so existing startup and recovery commands continue to work.
 
 The app follows the system light or dark theme. Release builds block Android screenshots of the app. Emulator-host capture is available for fake-data review, as described above. Debug builds permit Android screenshots and loopback HTTP for local fixtures. Release validation rejects loopback HTTP.
 
@@ -83,11 +85,17 @@ Settings and the acknowledgement queue are kept in app-private storage, with And
 
 The pairing format is a JSON object with `type: "phone-inbox"`, integer `version: 1`, an absolute `endpoint` URL and `phoneToken`. Optional `accessClientId` and `accessClientSecret` must both be present and nonblank, and are accepted only for HTTPS cloud connections. Unknown or duplicate fields are rejected. The complete payload is limited to 2,048 UTF-8 bytes. Images must be at most 16 MB and contain one clear QR code. A valid QR starts the authenticated connection check automatically; unsupported codes or unsuccessful checks leave the prior configuration unchanged. Unsolicited pairing intents and deep links are not accepted.
 
-The app requests visibility of launcher apps and several system packages to resolve app names. If Android hides a package label, the package name is sent instead. It does not request unrestricted visibility of every installed package. Notification access is powerful: assistants with access to your inbox can request clearing any notification, including bank, authenticator and system notifications. Only your pause and Android's own restrictions stop those clearing actions.
+The app requests visibility of launcher apps and several system packages to resolve app names and populate **Excluded apps**. The picker also includes current notification packages and saved exclusions. It does not request unrestricted visibility of every installed package. Android may hide apps without a launcher until they have an active notification. If a shared notification's app label is unavailable, the package name is sent instead. Excluded notifications send neither. Notification access is powerful: assistants with access to your inbox can request clearing shared notifications, including bank, authenticator and system notifications. Your explicit exclusions, pause and Android's own restrictions stop those clearing actions.
+
+## App privacy
+
+**Excluded apps** is available before pairing and notification access, and later under **Settings**. It is empty by default. Selected packages stay in app-private preferences across restarts, upgrades and changes of inbox. The list never leaves the phone. Excluded notifications are removed before reading their content or serialising their app name, package or key. Their notification events do not trigger uploads. Queued commands cannot clear an excluded notification.
+
+Choose exclusions before granting access to prevent an initial upload. Saving a new exclusion schedules a filtered snapshot. The previous inbox snapshot remains until a successful upload with a bound notification listener replaces it. Exclusions cannot recall data already sent, earlier receipts or assistant copies. An upload already in progress may finish before the choice is saved. The app shows when saving has completed.
 
 ## Clearing and pause
 
-There are no package allowlists, protected-app vetoes or clearing timers. The new `paused` preference defaults to false. Older `live`, `allowClearing`, `installedAt`, `noise` and `protected` preferences do not carry restrictions into the new behaviour. An explicitly saved `paused: true` is never reset by pairing.
+There are no mandatory package allowlists, hidden protected-app vetoes or clearing timers. The `paused` preference defaults to false. Older `live`, `allowClearing`, `installedAt`, `noise` and `protected` preferences do not carry restrictions into the new behaviour. An explicitly saved `paused: true` and the new `excludedApps` privacy choices are never reset by pairing.
 
 Changing the inbox address or credentials clears operational commands and acknowledgements belonging to the old connection. An in-flight request keeps its original credentials, and a superseded response cannot change the new connection or clear notifications.
 
@@ -95,7 +103,7 @@ The reply's legacy `dryRun` field is parsed for compatibility but does not veto 
 
 ## Posting and cancellation
 
-Pairing, notification changes, network changes and **Send latest notifications to your assistant** enqueue a send immediately, with no app-imposed debounce or delay. Changes during an in-flight send coalesce into at most one queued follow-up in the running process. A fresh trigger replaces work waiting for retry backoff instead of queuing behind its timer. WorkManager persists queued work, and app startup requests a fresh snapshot for recovery.
+Pairing, non-excluded notification changes, saved exclusions, network changes and **Send latest notifications to your assistant** enqueue a send immediately, with no app-imposed debounce or delay. Changes during an in-flight send coalesce into at most one queued follow-up in the running process. A fresh trigger replaces work waiting for retry backoff instead of queuing behind its timer. WorkManager persists queued work, and app startup requests a fresh snapshot for recovery.
 
 Assistant commands trigger a high-priority FCM data message containing only `type: sync`. The app shows a brief silent status notification and enqueues short expedited WorkManager work to fetch the commands, confirm cancellation and send results. Google acceptance is not phone confirmation. Android and connectivity can still delay delivery.
 
@@ -129,7 +137,7 @@ Run the Gradle gate above, then test with fake notifications and a non-productio
 2. Send fake numeric and letter-based authentication codes from authenticator and chat apps. Verify their complete title and message content do not reach the inbox, while keys remain available for clearing. Send a short time and verify it remains readable.
 3. Generate notifications continuously for several minutes. Confirm posts continue rather than waiting for silence. Then leave the phone idle and verify that full snapshots do not repeat. Repeat with operational notification permission denied to catch token-registration loops.
 4. Disconnect and reconnect the phone's network. For private-tailnet hosting, also reconnect Tailscale. Confirm the next successful flush contains the complete current shade. Revoke notification access and confirm inbox health reports an unbound listener without clearing the inbox.
-5. Ask the server to clear ordinary, bank, authenticator and system notifications and a missing key. Verify all requested current keys are attempted without a package veto. Turn on **Pause assistant clearing** and verify new clearing stops but sending continues; turn it off and verify pending clearing resumes.
+5. Ask the server to clear non-excluded ordinary, bank, authenticator and system notifications and a missing key. Verify all requested current keys are attempted without a hidden package veto. Turn on **Pause assistant clearing** and verify new clearing stops but sending continues; turn it off and verify pending clearing resumes. Exclude a test app and verify its entire notification entry disappears from the next bound snapshot, queued clearing cannot remove it from the phone, new notifications do not trigger uploads, and the choice survives a restart. Remove the exclusion and verify current notifications can be shared again.
 6. Interrupt connectivity after a cancellation and restart the process. Verify the acknowledgement is uploaded later. Force HTTP 409 and confirm the next request uses a larger sequence. Verify ongoing notifications are not falsely reported dismissed.
 7. Configure real FCM on the disposable relay, background the app and turn the screen off. Request a harmless dismissal and measure the time to its matching `applied` receipt without **Send latest notifications to your assistant** or a synthetic push intent. On a Google APIs emulator, repeat with `adb shell dumpsys deviceidle force-idle`, then restore normal idle state. A vanilla AOSP image cannot prove FCM delivery. Never use the real phone's relay tokens or database for fake emulator snapshots.
 

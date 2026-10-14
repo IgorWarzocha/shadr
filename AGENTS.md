@@ -1,6 +1,6 @@
-Follow this ordered setup runbook when commissioning Phone inbox. Stop at human-only steps and resume after consent. For ongoing consumption, load `SKILL.md`. The product is the latest phone snapshot, a pending dismissal queue and seven days of action receipts. Do not add notification history, first-seen tracking, classification, urgent webhooks, age escalation or export.
+Follow this ordered setup runbook when commissioning shadr. Stop at human-only steps and resume after consent. For ongoing consumption, load `SKILL.md`. The product is the latest phone snapshot, a pending dismissal queue and seven days of action receipts. Do not add notification history, first-seen tracking, classification, urgent webhooks, age escalation or export.
 
-After pairing and Android notification access, capture, send and clearing must work without an observation period, app allowlist or protected-package veto. The only user policy control is **Pause assistant clearing**, off by default. Keep OTP/2FA content out of uploads. Authentication, request validation and Android's permission boundaries remain mandatory.
+After pairing and Android notification access, capture, send and clearing must work without an observation period, mandatory app selection or hidden protected-package veto. **Excluded apps** is an optional, empty-by-default privacy blacklist: filter on the phone before serialising any notification content or metadata, never upload the list, and never clear excluded notifications. Make it available before granting notification access. **Pause assistant clearing** is off by default and affects clearing only. Keep OTP/2FA content out of uploads. Authentication, request validation and Android's permission boundaries remain mandatory.
 
 ## 1. Choose hosting and obtain consent
 
@@ -28,11 +28,11 @@ After pairing and Android notification access, capture, send and clearing must w
 
 ## 3. Explain and install the APK before showing a QR
 
-- Obtain a signed release APK. Prefer this repository's published GitHub Release asset `phone-inbox.apk`, then a downloadable mobile chat attachment or `docs/setup.md`'s temporary public HTTPS APK route. Do not make a public-setup phone join Tailscale just to download it. Grok desktop chat cannot deliver a downloadable attachment. If none exists, build using `docs/android.md` rather than inventing a release URL.
+- Obtain a signed release APK. Prefer this repository's published GitHub Release asset `shadr.apk`, then a downloadable mobile chat attachment or `docs/setup.md`'s temporary public HTTPS APK route. Do not make a public-setup phone join Tailscale just to download it. Grok desktop chat cannot deliver a downloadable attachment. If none exists, build using `docs/android.md` rather than inventing a release URL.
 - `npm run apk:serve -- --apk path/to/signed.apk` serves only the APK from the private bind on 8788. If publishing it through a separate unused Funnel port, stop that listener and the APK server after installation. Do not reuse the inbox's port or expose a directory. Without `--apk` it serves the local signed release at `android/app/build/outputs/apk/release/app-release.apk` or fails if absent. Never distribute a debug or unsigned build for ordinary use.
 - Explain where the human downloads it, opens it and authorises that installation source. Debug builds are not for long-lived production credentials.
 - **Human only:** approve sideloading and install the app. Preserve the signing identity on upgrades. Do not uninstall to bypass a signing mismatch.
-- Android 13+ may block notification access for a sideloaded app with **App was denied access**. Explain the recovery before asking repeatedly: **Settings > Apps > Phone inbox > ⋮ > Allow restricted settings**, then enable notification access. The app's **Open app settings** button opens its information page. This is a human permission decision, never an ADB bypass on a real phone.
+- Android 13+ may block notification access for a sideloaded app with **App was denied access**. Explain the recovery before asking repeatedly: **Settings > Apps > shadr > ⋮ > Allow restricted settings**, then enable notification access. The app's **Open app settings** button opens its information page. This is a human permission decision, never an ADB bypass on a real phone.
 
 ## 4. Pair with a private QR
 
@@ -44,9 +44,9 @@ After pairing and Android notification access, capture, send and clearing must w
 
 ## 5. Grant phone access and verify the first snapshot
 
-- **Human only:** enable Phone inbox in Android notification access settings and allow its own brief status notifications. Return to the app and finish bot-request setup. Use **Send latest notifications to your assistant** for the first check.
+- Before notification access, explain **Excluded apps** so the human can keep selected apps private from the first snapshot. **Human only:** enable shadr in Android notification access settings and allow its own brief status notifications. Return to the app and finish bot-request setup. Use **Send latest notifications to your assistant** for the first check.
 - Compare a harmless notification against the relay's latest snapshot and timestamps. Clear it manually and verify the next bound snapshot removes it.
-- Explain that bots can clear current notifications immediately and that **Pause assistant clearing** stops clearing without stopping uploads. No hidden protected-app or allowlist exceptions. OTP/2FA content must be omitted before upload. Do not promise that Android will let an app clear every ongoing notification.
+- Explain that bots can clear shared notifications immediately and that **Pause assistant clearing** stops clearing without stopping uploads. Honour explicit **Excluded apps** choices; add no hidden package restrictions. Exclusions cannot retract earlier uploads or assistant copies. OTP/2FA content must be omitted before upload. Do not promise that Android will let an app clear every ongoing notification.
 
 ## 6. Configure the consumer and core checks
 
@@ -55,7 +55,7 @@ After pairing and Android notification access, capture, send and clearing must w
 - Start on demand. Only on request, configure a quiet daily summary at the human's chosen time and timezone or an hourly hosting-aware health check. No implicit cron, urgent channel or classification system.
 - With a harmless notification approved for the setup check, request a real dismissal immediately and verify its phone-confirmed receipt. No simulated request, observation week or per-app enablement step. A queue response is not a completed cancellation.
 - Repeat with the app closed and screen off. For development, also force Doze on a Google APIs emulator and verify real FCM delivery and the correlated `applied` result. Manual **Send latest notifications to your assistant**, a synthetic Android intent or Google's accepted-send response is not background-delivery proof. Check that an idle phone does not repeatedly upload full snapshots.
-- Exercise **Pause assistant clearing** and resume. Preserve the user's explicit pause choice. Do not add a server-only off switch, app-protection list or timer that prevents the normal loop from working.
+- Exercise **Pause assistant clearing** and resume. Verify an explicitly excluded app contributes no content or metadata and cannot be cleared. Preserve both choices across restarts and pairing. Do not add a server-only off switch, default blacklist or timer that prevents the normal loop from working.
 
 ## 7. Troubleshoot and hand over
 

@@ -19,7 +19,7 @@ class Exchange(private val context: Context, private val store: Store, private v
     companion object {
         private val deadlines = ScheduledThreadPoolExecutor(1).apply { removeOnCancelPolicy = true }
     }
-    private data class Capture(val payload: ByteArray, val listener: ShadeListener?, val count: Int, val outcomes: JSONArray, val pushToken: String?)
+    private data class Capture(val payload: ByteArray, val listener: ShadeListener?, val count: Int, val outcomes: JSONArray, val pushToken: String?, val privacyRevision: Long)
     fun send(session: ConnectionSession = store.session()) {
         if (sendAttempt(session, recoverConflict = true)) sendAttempt(session, recoverConflict = false)
     }
@@ -32,12 +32,13 @@ class Exchange(private val context: Context, private val store: Store, private v
             val accessGranted = context.packageName in NotificationManagerCompat.getEnabledListenerPackages(context)
             val listener = if (accessGranted) ShadeListener.bound else null
             if (listener != null) resolvePending(listener)
-            val shade = listener?.activeNotifications?.filterNot { CommandNotice.isOperational(context, it) } ?: emptyList()
+            val excluded = store.excludedApps
+            val shade = listener?.activeNotifications?.filterNot { it.packageName in excluded || CommandNotice.isOperational(context, it) } ?: emptyList()
             val isBound = listener != null && ShadeListener.bound === listener
             check(shade.size <= 1000) { "Shade exceeds inbox limit" }
             if (isBound) store.lastListenerAt = Instant.now().toString()
             val lastListenerAt = store.lastListenerAt
-            val outcomes = store.outcomes()
+            val outcomes = AppPrivacy.outcomes(store.outcomes(), excluded)
             val pushToken = if (BackgroundAccess.notificationsEnabled(context)) store.pushToken else null
             val body = Protocol.snapshotHealth(accessGranted, isBound, lastListenerAt, store.zone)
                 .put("sequence", store.reserveSequence()).put("capturedAt", Instant.now().toString())
@@ -47,7 +48,7 @@ class Exchange(private val context: Context, private val store: Store, private v
             check(outcomes.length() <= 1000) { "Acknowledgements exceed inbox limit" }
             val payload = body.toString().toByteArray(Charsets.UTF_8)
             check(payload.size <= 2_000_000) { "Shade exceeds inbox byte limit" }
-            Capture(payload, listener, shade.size, outcomes, pushToken)
+            Capture(payload, listener, shade.size, outcomes, pushToken, store.privacyRevision)
         }
         val uri = URI(session.settings.endpoint.trimEnd('/') + "/notifications")
         val connection = uri.toURL().openConnection() as HttpURLConnection
@@ -58,9 +59,14 @@ class Exchange(private val context: Context, private val store: Store, private v
             connection.connectTimeout = 10_000
             connection.readTimeout = 10_000
             connection.doOutput = true
+            // Do not let HttpURLConnection defer a buffered body until after uploadLock is released.
+            connection.setFixedLengthStreamingMode(capture.payload.size)
             connection.setRequestProperty("Content-Type", "application/json")
             session.settings.authenticate(connection)
-            connection.outputStream.use { it.write(capture.payload) }
+            AppPrivacy.write(capture.privacyRevision, { store.privacyRevision }) {
+                check(active()) { "Send stopped" }
+                connection.outputStream.use { it.write(capture.payload) }
+            }
             val code = connection.responseCode
             if (code == 409 && recoverConflict) {
                 recoverSequence(session)
@@ -91,11 +97,12 @@ class Exchange(private val context: Context, private val store: Store, private v
                         settled.add(receipt.getString("requestId") to receipt.getString("key"))
                     }
                 }
-                val incoming = reply.dismiss.filterNot { it.requestId to it.key in settled }
+                val incoming = reply.dismiss.filterNot { it.requestId to it.key in settled || AppPrivacy.excludesKey(it.key, store.excludedApps) }
                 store.pending = (store.pending + incoming).distinct()
                 // Confirmation can finish while HTTP is in flight; clear only the sent receipts.
                 store.removeSentOutcomes(capture.outcomes)
-                store.posted(capture.count)
+                if (capture.privacyRevision == store.privacyRevision) store.posted(capture.count)
+                else Posting.schedule(context)
                 store.pushSent(capture.pushToken)
                 if (ShadeListener.bound === capture.listener && capture.listener != null) resolvePending(capture.listener)
             }
@@ -144,6 +151,10 @@ class Exchange(private val context: Context, private val store: Store, private v
             check(ShadeListener.bound === listener && context.packageName in NotificationManagerCompat.getEnabledListenerPackages(context)) { "Notification access unavailable" }
             check(active()) { "Send stopped" }
             val current = listener.activeNotifications.firstOrNull { it.key == key }
+            if (current?.packageName in store.excludedApps || AppPrivacy.excludesKey(key, store.excludedApps)) {
+                store.pending = store.pending.filterNot { it == command }
+                continue
+            }
             val now = SystemClock.elapsedRealtime()
             val attempt = store.clearAttempt(command)?.takeIf { it.startedAt <= now }
             val age = if (attempt == null) 0 else now - attempt.startedAt

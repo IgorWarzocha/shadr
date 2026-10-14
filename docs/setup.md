@@ -73,7 +73,7 @@ Use a signed release APK for ordinary use. Download it from GitHub Releases when
 
 Open the APK on the phone and approve installation from that source. Keep the release signing identity stable for updates. Do not uninstall an existing app to bypass a signing mismatch, as that loses private settings.
 
-On Android 13 and newer, a sideloaded app may show **App was denied access** when you enable notification access. Open **Settings > Apps > Phone inbox > ⋮ > Allow restricted settings**, then return to notification access and enable Phone inbox. The app also offers **Open app settings** to reach its information page. Android requires you to approve this yourself.
+On Android 13 and newer, a sideloaded app may show **App was denied access** when you enable notification access. Open **Settings > Apps > shadr > ⋮ > Allow restricted settings**, then return to notification access and enable shadr. The app also offers **Open app settings** to reach its information page. Android requires you to approve this yourself.
 
 To serve a signed APK from the host:
 
@@ -81,13 +81,13 @@ To serve a signed APK from the host:
 npm run apk:serve -- --apk path/to/signed.apk
 ```
 
-The server uses the tailnet address in `.local.env` and port 8788 by default. Only `/phone-inbox.apk` is served, with no directory listing. For an internet-only phone, your agent can temporarily expose this fixed APK route on a separate, unused Funnel port:
+The server uses the tailnet address in `.local.env` and port 8788 by default. Only `/shadr.apk` is served, with no directory listing. For an internet-only phone, your agent can temporarily expose this fixed APK route on a separate, unused Funnel port:
 
 ```sh
 tailscale funnel --bg --https=8443 "http://$(tailscale ip -4):8788"
 ```
 
-Open `https://YOUR-FUNNEL-HOST:8443/phone-inbox.apk` on the phone. This publishes the APK, not the relay credentials. After installation, run `tailscale funnel --https=8443 off` and stop the APK server. Do not replace the inbox's port 10000 or another existing service. `--bind` and `--port` override the APK server defaults. Omitting `--apk` selects the locally built signed release APK. If it is absent, the server fails rather than serving a debug build.
+Open `https://YOUR-FUNNEL-HOST:8443/shadr.apk` on the phone. This publishes the APK, not the relay credentials. After installation, run `tailscale funnel --https=8443 off` and stop the APK server. Do not replace the inbox's port 10000 or another existing service. `--bind` and `--port` override the APK server defaults. Omitting `--apk` selects the locally built signed release APK. If it is absent, the server fails rather than serving a debug build.
 
 ### Pair privately
 
@@ -105,7 +105,7 @@ If the setup assistant runs on another machine, retrieve the file over its exist
 
 ```sh
 umask 077
-scp relay:/absolute/path/to/phone-digest/phone.pairing.gif ./phone.pairing.gif
+scp relay:/absolute/path/to/shadr/phone.pairing.gif ./phone.pairing.gif
 chmod 600 ./phone.pairing.gif
 ```
 
@@ -113,11 +113,13 @@ Use your SSH host alias and actual path. Open the file locally, or send it as an
 
 A human at a private, unrecorded terminal can instead run `npm run pair` to display a terminal QR. A printed QR still reveals the credential even though the token is not written as plain text. It cannot be safely put in a logged assistant tool result. Non-interactive terminal output is refused.
 
-In Phone inbox, choose **Scan QR** or **Import QR image**. The app checks the connection and saves it automatically when the inbox accepts the phone's credentials. Only use a code from your trusted setup agent. Images are decoded on the phone without broad photo access. **Enter details manually** is available if you cannot use a QR.
+In shadr, choose **Scan QR** or **Import QR image**. The app checks the connection and saves it automatically when the inbox accepts the phone's credentials. Only use a code from your trusted setup agent. Images are decoded on the phone without broad photo access. **Enter details manually** is available if you cannot use a QR.
 
 For Cloudflare, use `--endpoint` with your public HTTPS origin and `--credentials` with a private file containing `PHONE_TOKEN`, `ACCESS_CLIENT_ID` and `ACCESS_CLIENT_SECRET`. The QR carries the extra credentials, so there are no Access fields to fill in on the phone. Funnel needs no Access credentials. Never pass secret values as command arguments.
 
-After connecting, allow Phone inbox to show notifications and enable it in Android notification access settings. The app shows a quiet status notification while processing a command. Return to the app and use **Send latest notifications to your assistant**. Compare a harmless notification with the assistant's read of the shade. The app follows your system theme.
+Before enabling notification access, use **Excluded apps** if there are apps you don't want your assistant to see. Nothing is excluded by default. Excluded notifications are filtered on the phone, including their app names and identifiers, and cannot be cleared by the assistant. The exclusion list is never uploaded.
+
+After connecting, allow shadr to show notifications and enable it in Android notification access settings. The app shows a quiet status notification while processing a command. Return to the app and use **Send latest notifications to your assistant**. Compare a harmless, non-excluded notification with the assistant's read of the shade. The app follows your system theme.
 
 ### Connect the assistant
 
@@ -125,7 +127,7 @@ Hand over `~/.config/phone-inbox/bot.env`, created during endpoint checks. Trans
 
 Load [SKILL.md](../SKILL.md). The consumer can call ordinary HTTP with curl or its own HTTP client, without Node or this checkout. Start on demand. A daily summary at your chosen time and an hourly hosting-aware health check are optional.
 
-Clearing is enabled immediately. There is no observation week, app allowlist or extra protection switch to configure. **Pause assistant clearing** stops clearing while snapshots continue to send. Android may refuse to clear an ongoing notification; the app must not report it cleared until it is actually gone. Test a harmless real dismissal through the same public endpoint used for pairing and verify the phone-confirmed receipt.
+Clearing is enabled immediately for shared notifications. There is no observation week, mandatory app selection or extra enablement switch. **Pause assistant clearing** stops clearing while snapshots continue to send. Change privacy exclusions through **Settings > Excluded apps**. A newly excluded app leaves the latest snapshot after a successful bound upload; this cannot retract earlier uploads, receipts or assistant copies. Android may refuse to clear an ongoing notification; the app must not report it cleared until it is actually gone. Test a harmless real dismissal through the same public endpoint used for pairing and verify the phone-confirmed receipt.
 
 Repeat that check with the app closed and the screen off. Do not use **Send latest notifications to your assistant** to complete a background-delivery check. FCM acceptance is not proof that the phone woke or cleared anything.
 
@@ -137,11 +139,11 @@ Your setup assistant should explain this before starting: it will use your Googl
 
 This console path was executed successfully on 13 October 2026:
 
-1. Open the [Firebase console](https://console.firebase.google.com/). Choose **Get started by setting up a Firebase project**, or **Add project** for an existing account. Enter **Phone inbox** and retain an available project ID. Complete first-use Firebase terms as authorised by the user.
+1. Open the [Firebase console](https://console.firebase.google.com/). Choose **Get started by setting up a Firebase project**, or **Add project** for an existing account. Enter **shadr** and retain an available project ID. Complete first-use Firebase terms as authorised by the user.
 2. Choose **Continue**. Turn off **Enable Gemini in Firebase**, then continue and turn off **Enable Google Analytics for this project**. Choose **Create project**, wait for the ready screen and continue. Verify **Spark · No cost ($0/month)**. Do not attach a billing account.
-3. On the project overview, choose **Add app**, then **Create an Android app**. Enter package **`dev.howaboua.phonedigest`** and nickname **Phone inbox**. Choose **Register app**, then **Download google-services.json**. No signing fingerprint was needed. Skip the generic wizard's Gradle and Analytics changes: the published APK reads runtime configuration and does not need rebuilding.
+3. On the project overview, choose **Add app**, then **Create an Android app**. Enter package **`dev.howaboua.phonedigest`** and nickname **shadr**. Choose **Register app**, then **Download google-services.json**. No signing fingerprint was needed. Skip the generic wizard's Gradle and Analytics changes: the published APK reads runtime configuration and does not need rebuilding.
 4. Open **Project settings > Cloud Messaging**. Verify **Firebase Cloud Messaging API (V1) Enabled**. It was enabled automatically in the verified setup. If disabled, enable **Firebase Cloud Messaging API**, service `fcm.googleapis.com`, in the selected project. Leave the legacy API disabled. Android delivery needs no Web Push certificate.
-5. Open Google Cloud Console, select the same project, then **IAM & Admin > Service accounts > Create service account**. Name it **Phone inbox FCM sender**, with ID **phone-inbox-fcm-sender**. Choose **Create and continue**.
+5. Open Google Cloud Console, select the same project, then **IAM & Admin > Service accounts > Create service account**. Name it **shadr FCM sender**, with ID **phone-inbox-fcm-sender**. Choose **Create and continue**.
 6. Under permissions, search for and select **Firebase Cloud Messaging API Admin**, role `roles/firebasecloudmessaging.admin`. Do not grant Editor, Owner or broad Firebase Admin. Continue, skip optional principals and choose **Done**.
 7. Open that service account, then **Keys > Add key > Create new key > JSON > Create**. Download the JSON key. Verify the account's role in the project's IAM page. This key belongs on the relay host, not in the consuming assistant's configuration or the APK.
 8. Move both downloaded files into an owner-only directory. On Unix use mode 0700 for the directory and 0600 for files. On Windows use account-only ACLs. If the browser is on another machine, transfer just these files to the relay host through authenticated file transfer. Keep a private record of the project, actions and file locations, without printing credential contents.
@@ -162,7 +164,7 @@ npx wrangler secret bulk .env.fcm --env production --config wrangler.private.jso
 
 Do not deploy until the human has authorised that deployment. Firebase credentials are separate from Cloudflare Access and inbox bearer tokens. Remove redundant downloaded key copies after securing the relay's configuration. Revoke a compromised key in Google IAM, not by rotating inbox bearer tokens.
 
-The phone obtains public Firebase client configuration from authenticated `/health`, registers with FCM and sends its registration token to the relay. The sender key stays on the relay. After changing Firebase projects, open Phone inbox and use **Send latest notifications to your assistant** to fetch the new configuration and register again. Validate actual screen-off command delivery after setup. Missing configuration or a missing registration token is a setup failure, not a reason to fall back to polling.
+The phone obtains public Firebase client configuration from authenticated `/health`, registers with FCM and sends its registration token to the relay. The sender key stays on the relay. After changing Firebase projects, open shadr and use **Send latest notifications to your assistant** to fetch the new configuration and register again. Validate actual screen-off command delivery after setup. Missing configuration or a missing registration token is a setup failure, not a reason to fall back to polling.
 
 ## Cloudflare setup
 

@@ -128,6 +128,7 @@ class SetupActivity : AppCompatActivity() {
             "allow" -> {
                 title("Allow notification access")
                 text("Allow access so your assistant can read and clear notifications.")
+                excludedAppsButton()
                 button("Allow notification access", R.id.allow_access) { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
                 if (SetupFlow.restrictedSettingsHelp(android.os.Build.VERSION.SDK_INT, notificationAccess())) {
                     text("If Android says 'App was denied access':\n1. Tap Open app settings.\n2. Open the three-dot menu and tap Allow restricted settings.\n3. Return here and allow notification access.")
@@ -138,9 +139,9 @@ class SetupActivity : AppCompatActivity() {
                 text("Return here after allowing access.")
             }
             "background" -> backgroundSetup()
-            "done" -> { title("You're ready"); text("Notifications are sent in the background. ${clearingStatus()}"); button("Open Phone inbox", R.id.continue_setup) { show("main") } }
+            "done" -> { title("You're ready"); text("Notifications are sent in the background. ${clearingStatus()}"); button("Open shadr", R.id.continue_setup) { show("main") } }
             "main" -> main()
-            "settings" -> { title("Settings"); button("Connection", R.id.edit_connection) { show("connect") }; button("Assistant clearing", R.id.background_settings) { show("background") }; button("Back", R.id.back) { show("main") } }
+            "settings" -> { title("Settings"); excludedAppsButton(); button("Connection", R.id.edit_connection) { show("connect") }; button("Assistant clearing", R.id.background_settings) { show("background") }; button("Back", R.id.back) { show("main") } }
         }
     }
     private fun connect() {
@@ -150,12 +151,13 @@ class SetupActivity : AppCompatActivity() {
             generation++
             scanPairing.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE)
                 .setCaptureActivity(PairingScanActivity::class.java).setBeepEnabled(false)
-                .setOrientationLocked(false).setPrompt("Scan your Phone inbox pairing QR"))
+                .setOrientationLocked(false).setPrompt("Scan your shadr pairing QR"))
         }
         val image = button("Import QR image", R.id.import_pairing) {
             generation++
             pickPairing.launch("image/*")
         }
+        excludedAppsButton()
         val manualToggle = TextView(this).apply {
             id = R.id.enter_manual
             text = "Enter details manually"
@@ -219,12 +221,15 @@ class SetupActivity : AppCompatActivity() {
         }
         if (store.configured) button("Back", R.id.back) { show("settings") }
     }
+    private fun excludedAppsButton() = button("Excluded apps (${store.excludedApps.size})", R.id.excluded_apps) {
+        startActivity(Intent(this, ExcludedAppsActivity::class.java))
+    }
     private fun notificationAccess() = SetupFlow.access(
         packageName in NotificationManagerCompat.getEnabledListenerPackages(this), ShadeListener.bound != null
     )
     private fun backgroundSetup() {
         title("Let your assistant clear notifications")
-        text("Phone inbox shows a brief, silent notification while your assistant clears notifications.")
+        text("shadr shows a brief, silent notification while your assistant clears notifications.")
         val notificationsEnabled = BackgroundAccess.notificationsEnabled(this)
         if (!notificationsEnabled) {
             button("Allow notifications", R.id.allow_service_notifications) {
@@ -248,7 +253,7 @@ class SetupActivity : AppCompatActivity() {
         val posted = if (store.lastPost == 0L) "Not yet" else java.time.format.DateTimeFormatter.ofPattern("MMM d, HH:mm").withZone(java.time.ZoneId.systemDefault()).format(Instant.ofEpochMilli(store.lastPost))
         val connection = when {
             notificationAccess() == NotificationAccess.REQUIRED -> "Notification access needed\nAllow access to share notifications with your assistant."
-            !BackgroundAccess.notificationsEnabled(this) -> "Allow Phone inbox notifications\nOpen Assistant clearing to finish setup."
+            !BackgroundAccess.notificationsEnabled(this) -> "Allow shadr notifications\nOpen Assistant clearing to finish setup."
             !store.pushRegistered -> "Your assistant isn't connected yet\nOpen Assistant clearing to finish setup."
             notificationAccess() == NotificationAccess.WAITING_FOR_LISTENER -> "Starting notification access\nKeep notification access enabled."
             store.postState == PostState.FAILED -> "Connection problem\nCheck your network. We'll retry."
@@ -257,7 +262,7 @@ class SetupActivity : AppCompatActivity() {
         return "$connection\n\nLast sent: $posted\n${clearingStatus()}"
     }
     private fun main() {
-        title("Phone inbox")
+        title("shadr")
         text(statusText()).id = R.id.status
         val message = feedback()
         button("Send latest notifications to your assistant", R.id.post_now) { queuedAt = System.currentTimeMillis(); Posting.schedule(this); message.visibility = View.VISIBLE; message.text = "Sending notifications to your assistant" }
@@ -286,7 +291,7 @@ class SetupActivity : AppCompatActivity() {
         container.addView(edit); body.addView(container, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(16) }); return edit
     }
     private fun button(value: String, viewId: Int, action: () -> Unit) = MaterialButton(this).apply { id = viewId; text = value
-        if (viewId in setOf(R.id.back, R.id.settings, R.id.edit_connection, R.id.import_pairing, R.id.open_app_settings, R.id.background_settings)) {
+        if (viewId in setOf(R.id.back, R.id.settings, R.id.edit_connection, R.id.import_pairing, R.id.open_app_settings, R.id.background_settings, R.id.excluded_apps)) {
             backgroundTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT)
             setTextColor(MaterialColors.getColor(this, com.google.android.material.R.attr.colorPrimary))
             strokeWidth = dp(1); strokeColor = android.content.res.ColorStateList.valueOf(MaterialColors.getColor(this, com.google.android.material.R.attr.colorOutline))
@@ -294,6 +299,7 @@ class SetupActivity : AppCompatActivity() {
         minimumHeight = dp(56); setOnClickListener { action() }; body.addView(this, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) }) }
     override fun onResume() {
         super.onResume()
+        findViewById<MaterialButton>(R.id.excluded_apps)?.text = "Excluded apps (${store.excludedApps.size})"
         if (store.configured) { PushRegistration.refresh(this); Posting.schedule(this) }
         if (screen == "background") show("background")
         handler.post(refresh)

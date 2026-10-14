@@ -11,12 +11,13 @@
         <package android:name="com.android.phone" />
         <package android:name="com.android.server.telecom" />
     </queries>
-    <application android:name=".DigestApp" android:label="Phone inbox" android:icon="@drawable/ic_inbox" android:allowBackup="false" android:fullBackupContent="false" android:dataExtractionRules="@xml/data_extraction_rules" android:usesCleartextTraffic="true" android:theme="@style/Theme.PhoneInbox">
+    <application android:name=".DigestApp" android:label="shadr" android:icon="@drawable/ic_inbox" android:allowBackup="false" android:fullBackupContent="false" android:dataExtractionRules="@xml/data_extraction_rules" android:usesCleartextTraffic="true" android:theme="@style/Theme.PhoneInbox">
         <activity android:name=".SetupActivity" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
         </activity>
+        <activity android:name=".ExcludedAppsActivity" android:exported="false" />
         <activity android:name=".PairingScanActivity" android:exported="false" android:theme="@style/zxing_CaptureTheme" />
-        <service android:name=".ShadeListener" android:label="Phone inbox" android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" android:exported="true">
+        <service android:name=".ShadeListener" android:label="shadr" android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" android:exported="true">
             <intent-filter><action android:name="android.service.notification.NotificationListenerService" /></intent-filter>
         </service>
         <service android:name=".PushService" android:exported="false"><intent-filter><action android:name="com.google.firebase.MESSAGING_EVENT" /></intent-filter></service>

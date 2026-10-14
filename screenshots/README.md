@@ -1,8 +1,8 @@
 # Signed-release visual verification
 
-These PNGs show the signed v0.7 release on an Android 15 Google APIs emulator with a Pixel 6 profile at 1080 × 2400. The APK is not debuggable and retains `FLAG_SECURE`. Screens are captured through the emulator's supported host-framebuffer command, not Android's screenshot API. No security flags or release endpoint rules are changed.
+These PNGs show the signed shadr v0.8 release on an Android 15 Google APIs emulator with a Pixel 6 profile at 1080 × 2400. The APK is not debuggable and retains `FLAG_SECURE`. Screens are captured through the emulator's supported host-framebuffer command, not Android's screenshot API. No security flags or release endpoint rules are changed.
 
-Captured app source: `54805d6`. APK SHA-256: `d3f210c36841de94cdb0aa1e91fc7b2ff6882dea61a3fe65dfa3a1c1bc9e6dab`.
+Captured APK version code: `8`. SHA-256: `61572888f7f64b2b750e0bc12b82c955ba1677847accae2352c669fecd74080f`.
 
 Each screen has a light and dark capture. Notification content and pairing credentials are fake. The fixture runs the actual relay with disposable D1, test bearer tokens and real Firebase configuration. Its private address is not shown in the captures. It never connects to the deployed phone inbox or reads production bearer credentials or database state.
 
@@ -13,7 +13,7 @@ Each screen has a light and dark capture. Notification content and pairing crede
 | `02-notification-access-*.png` | Notification access with numbered restricted-settings help |
 | `03-done-*.png` | Setup complete after allowing notifications |
 | `04-status-*.png` | Connected main screen with the recovery send button |
-| `05-settings-*.png` | Connection and Assistant clearing settings |
+| `05-settings-*.png` | Excluded apps, Connection and Assistant clearing settings |
 | `06-paused-*.png` | Pause assistant clearing enabled |
 | `07-connection-error-*.png` | Rejected QR with a plain-language error |
 | `08-inbox-unreachable-*.png` | Unreachable example HTTPS inbox |
@@ -23,10 +23,14 @@ Each screen has a light and dark capture. Notification content and pairing crede
 | `12-tailscale-unreachable-*.png` | Unreachable example private hostname |
 | `13-app-info-*.png` | Android app information opened from restricted-settings help |
 | `14-bot-requests-*.png` | Let your assistant clear notifications, with one primary action and Back |
+| `15-excluded-apps-*.png` | A notification-only app excluded through the searchable picker |
+| `16-exclusions-before-setup-*.png` | An exclusion saved before pairing or notification permission |
 
-The focused capture flow checks automatic QR connection, manual entry, cold launches, permission handoffs and the automatic transition after allowing notifications. A fake notification settles the connected-status screen. After a rejected replacement QR, a cold launch must still return to the main screen. Offline error screens use example hostnames, not the fixture's private address. Normal font size and networking are restored afterwards.
+`readme-overview.png` combines the light pairing, main and exclusion screens into one wide strip, cropped below the controls to remove unused space.
 
-The scanner shows the emulator's virtual room. Live camera decoding of a physical QR and Android's exact restricted-settings menu are not verified here. The default run focuses on wording and screenshots. Add `--verify-delivery --theme light` when changing delivery behaviour to check real FCM, a 20-notification forced-Doze batch, idle uploads, pause and authentication-code omission. These checks also passed on this signed release. The user separately reported successful locked-Pixel dismissal in about two seconds.
+The focused capture flow checks automatic QR connection, manual entry, cold launches, permission handoffs and the automatic transition after allowing notifications. A pre-permission exclusion must survive restart and pairing. A fake notification settles the connected-status screen. The privacy check excludes Shell notifications, confirms the whole entries disappear from the relay while remaining on the phone, checks that new excluded events do not trigger uploads, restarts the app and then restores sharing. After a rejected replacement QR, a cold launch must still return to the main screen. Offline error screens use example hostnames, not the fixture's private address. Normal font size and networking are restored afterwards.
+
+The scanner shows the emulator's virtual room. Live camera decoding of a physical QR and Android's exact restricted-settings menu are not verified here. Add `--verify-delivery --theme light` when changing delivery behaviour to check real FCM, a 20-notification forced-Doze batch, idle uploads, pause, authentication-code omission and protection against commands queued before an app was excluded. These checks also passed on this signed release. The user separately reported successful locked-Pixel dismissal in about two seconds on v0.7; v0.8 has not yet been verified on that physical phone.
 
 ## Reproduce
 
@@ -70,3 +74,12 @@ mkdir -p .build/emulator-screenshot
 ```
 
 Use `--theme light` or `--theme dark` for one theme. Review the PNGs for clipping, contrast, keyboard and system-bar overlap. This disposable private fixture is not a commissioning test of the real public endpoint.
+
+Rebuild the cropped README strip with ImageMagick after capturing the light screens:
+
+```sh
+magick \( screenshots/00-pairing-start-light.png -crop 1080x1420+0+135 +repage \) \
+  \( screenshots/04-status-light.png -crop 1080x1420+0+135 +repage \) \
+  \( screenshots/16-exclusions-before-setup-light.png -crop 1080x1420+0+135 +repage \) \
+  -background '#DEE5DA' -splice 16x0+0+0 +append screenshots/readme-overview.png
+```

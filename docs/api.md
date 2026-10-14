@@ -69,7 +69,7 @@ For a live request, the POST response is:
 
 Only `dismiss` contains executable commands. Each command has a distinct opaque ID in `requestIds`. Refuse a command without its ID. `wouldDismiss` is informational and must never cancel anything. Pending commands retain their IDs across delivery retries.
 
-The server delivers commands immediately, without a commissioning hold, package restrictions or a server opt-out. The phone's **Pause assistant clearing** control pauses cancellation. An unbound post never receives executable commands. Previously queued dry-run requests now deliver with their original request IDs, without requeueing. Historical receipts keep their original flags, but newly confirmed results use `dryRun: 0`.
+The server delivers commands immediately, without a commissioning hold, package restrictions or a server opt-out. The phone's **Pause assistant clearing** control pauses cancellation. Its local **Excluded apps** list filters whole notifications before upload and blocks their cancellation, including commands queued before exclusion. Neither the list nor excluded notification metadata is part of the protocol. A subsequent bound snapshot replaces previously shared entries and ends pending delivery for missing keys. Exclusion does not retract earlier receipts or assistant copies. An unbound post never receives executable commands. Previously queued dry-run requests now deliver with their original request IDs, without requeueing. Historical receipts keep their original flags, but newly confirmed results use `dryRun: 0`.
 
 ## Queue dismissals
 
@@ -138,7 +138,7 @@ Only phone-authenticated health includes `pushConfig`: `{projectId,applicationId
 | `phone_idle` | At least two minutes since a POST, without an overdue command | The phone is quiet; a new action needs phone confirmation. |
 | `phone_offline` | A pending command has remained unconfirmed for at least two minutes | Check the phone connection. |
 | `notification_access_revoked` | Latest POST explicitly reports permission false | Enable notification access on the phone. |
-| `phone_not_ready` | Unbound listener, missing push configuration or no registered push token | Open Phone inbox and check its status. |
+| `phone_not_ready` | Unbound listener, missing push configuration or no registered push token | Open shadr and check its status. |
 
 No first POST does not prove pairing was never attempted. `phone_offline` does not prove the phone is powered off. Permission and setup failures take precedence over idle or overdue-command states. Idle silence is expected with event-driven uploads, not proof of disconnection. `ok` describes the latest observation, not a live connection guarantee. The relay defines no urgency, digest schedule, daytime cutoff or alert policy.
 

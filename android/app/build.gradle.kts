@@ -11,7 +11,7 @@ if (hasReleaseSigning) {
 android {
     namespace = "dev.howaboua.phonedigest"
     compileSdk = 35
-    defaultConfig { applicationId = "dev.howaboua.phonedigest"; minSdk = 26; targetSdk = 35; versionCode = 7; versionName = "0.7" }
+    defaultConfig { applicationId = "dev.howaboua.phonedigest"; minSdk = 26; targetSdk = 35; versionCode = 8; versionName = "0.8" }
     buildFeatures { buildConfig = true }
     if (hasReleaseSigning) {
         signingConfigs {

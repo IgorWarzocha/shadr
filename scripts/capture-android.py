@@ -164,6 +164,102 @@ def receipt(request_id):
         for entry in shade["dismissalLog"]), "No phone-confirmed dismissal receipt arrived")
 
 
+def save_exclusions():
+    tap("save_exclusions")
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if node("save_exclusions").get("enabled") == "true":
+            if not any("Saved." in element.get("text", "") for element in hierarchy().iter("node")):
+                raise RuntimeError("Exclusions did not report a successful save")
+            return
+        time.sleep(0.2)
+    raise RuntimeError("Exclusions did not finish saving")
+
+
+def wait_sent_feedback():
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if not any(element.get("resource-id") == APP + ":id/feedback" for element in hierarchy().iter("node")):
+            return
+        time.sleep(0.2)
+    raise RuntimeError("Send feedback did not settle before navigating")
+
+
+def verify_exclusions(theme):
+    # Shell is a real non-launcher package, discovered through its active notifications.
+    # Keep a command locally pending before exclusion, then prove it cannot clear.
+    tag = "privacy-before-" + theme
+    adb("shell", "cmd", "notification", "post", "-t", "Private test notification", tag, "Keep this on the phone.")
+    shade = wait_shade(lambda value: any(tag in item["key"] for item in value["notifications"]), "Privacy fixture was not uploaded before exclusion")
+    key = next(item["key"] for item in shade["notifications"] if tag in item["key"])
+    tap("pause_clearing")
+    if args.verify_delivery:
+        queued = relay("/dismiss", {"keys": [key], "reason": "exclusion boundary verification"})
+        received = relay()["receivedAt"]
+        tap("post_now")
+        wait_shade(lambda value: value["receivedAt"] != received, "Paused command was not fetched")
+        if key not in adb("shell", "cmd", "notification", "list"):
+            raise RuntimeError("Paused privacy fixture was cleared")
+        # The main-screen refresh removes the send feedback and moves Settings upward.
+        wait_sent_feedback()
+    tap("settings")
+    tap("excluded_apps")
+    enter("app_search", "Shell")
+    adb("shell", "input", "keyevent", "KEYCODE_BACK")
+    if node("com.android.shell").get("checked") != "false":
+        raise RuntimeError("App exclusion must be opt-in")
+    tap("com.android.shell")
+    save_exclusions()
+    capture("15-excluded-apps", theme)
+    wait_shade(lambda value: all(item["package"] != "com.android.shell" for item in value["notifications"])
+               and not any(item["key"] == key for item in value["pending"]), "Excluded app remained in the latest inbox or pending queue")
+    tap("back")
+    tap("back")
+    tap("pause_clearing")
+    cold_launch()
+    node("post_now")
+    if key not in adb("shell", "cmd", "notification", "list"):
+        raise RuntimeError("Excluded app was cleared by a previously queued command")
+    tap("settings")
+    tap("excluded_apps")
+    enter("app_search", "Shell")
+    adb("shell", "input", "keyevent", "KEYCODE_BACK")
+    if node("com.android.shell").get("checked") != "true":
+        raise RuntimeError("App exclusion did not survive a cold launch")
+    tap("back")
+    tap("back")
+    # Wait for startup-triggered work to settle, then excluded events must stay local.
+    time.sleep(10)
+    before = relay("/health")["sequence"]
+    hidden_tag = "privacy-new-" + theme
+    adb("shell", "cmd", "notification", "post", "-t", "Entirely private", hidden_tag, "No content or metadata may leave.")
+    time.sleep(10)
+    if relay("/health")["sequence"] != before:
+        raise RuntimeError("Excluded notification triggered an upload")
+    received = relay()["receivedAt"]
+    tap("post_now")
+    shared = wait_shade(lambda value: value["receivedAt"] != received, "Manual filtered snapshot did not arrive")
+    if any(item["package"] == "com.android.shell" for item in shared["notifications"]):
+        raise RuntimeError("Excluded notification content or metadata reached the inbox")
+    if hidden_tag in json.dumps(shared):
+        raise RuntimeError("Never-shared excluded key leaked through an outcome or metadata")
+    wait_sent_feedback()
+    tap("settings")
+    tap("excluded_apps")
+    enter("app_search", "Shell")
+    adb("shell", "input", "keyevent", "KEYCODE_BACK")
+    tap("com.android.shell")
+    save_exclusions()
+    restored = wait_shade(lambda value: any(hidden_tag in item["key"] for item in value["notifications"]), "Removing exclusion did not restore sharing")
+    if not any(item["key"] == key for item in restored["notifications"]):
+        raise RuntimeError("Stale excluded command cleared the notification after sharing resumed")
+    tap("back")
+    tap("back")
+    print("Exclusions: whole-entry privacy, local event silence, restart and opt-in restoration passed", flush=True)
+    if args.verify_delivery:
+        print("Exclusions: previously queued command could not clear the private notification", flush=True)
+
+
 def background_clear(doze):
     tag = "fcm-doze" if doze else "fcm-screen-off"
     count = 20 if doze else 1
@@ -218,6 +314,18 @@ for theme in (["light", "dark"] if args.theme == "both" else [args.theme]):
     if manual_link.get("class") != "android.widget.TextView" or manual_link.get("clickable") != "true":
         raise RuntimeError("Manual entry must use a secondary text link")
     capture("00-pairing-start", theme)
+    tap("excluded_apps")
+    node("app_search")
+    # A choice must be possible before any pairing or notification permission.
+    if not any(element.get("checkable") == "true" for element in hierarchy().iter("node")):
+        raise RuntimeError("Pre-permission app picker contains no selectable apps")
+    enter("app_search", "Clock")
+    adb("shell", "input", "keyevent", "KEYCODE_BACK")
+    tap("com.google.android.deskclock")
+    save_exclusions()
+    capture("16-exclusions-before-setup", theme)
+    tap("back")
+    cold_launch()
     tap("scan_pairing")
     tap("WHILE USING THE APP")
     time.sleep(3)
@@ -234,6 +342,11 @@ for theme in (["light", "dark"] if args.theme == "both" else [args.theme]):
     adb("shell", "input", "keyevent", "KEYCODE_BACK")
     tap("test_connection")
     node("allow_access")
+    tap("excluded_apps")
+    enter("app_search", "Clock")
+    adb("shell", "input", "keyevent", "KEYCODE_BACK")
+    if node("com.google.android.deskclock").get("checked") != "true":
+        raise RuntimeError("Pre-permission exclusion did not survive restart and pairing")
     # QR import must reach the same next step automatically, with no form submit.
     fresh_start(theme)
     import_qr("phone-inbox-rejected.gif")
@@ -247,7 +360,7 @@ for theme in (["light", "dark"] if args.theme == "both" else [args.theme]):
     capture("02-notification-access", theme)
     node("open_app_settings")
     tap("open_app_settings")
-    if not any(element.get("package") == "com.android.settings" and element.get("text") == "Phone inbox"
+    if not any(element.get("package") == "com.android.settings" and element.get("text") == "shadr"
                for element in hierarchy().iter("node")):
         raise RuntimeError("Restricted-settings recovery did not open this app's information page")
     capture("13-app-info", theme)
@@ -344,6 +457,7 @@ for theme in (["light", "dark"] if args.theme == "both" else [args.theme]):
         otp = next(item for item in redacted["notifications"] if otp_tag in item["key"])
         if "AB7X92" in otp["title"] + otp["text"] or "Your OTP" in otp["text"]:
             raise RuntimeError("OTP content reached the relay")
+    verify_exclusions(theme)
     tap("settings")
     capture("05-settings", theme)
     tap("edit_connection")

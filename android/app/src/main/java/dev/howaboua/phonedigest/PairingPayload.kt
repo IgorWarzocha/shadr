@@ -50,7 +50,7 @@ object PairingPayload {
             return settings
         } catch (_: Exception) {
             // Never echo QR contents or parser exceptions containing credentials.
-            throw IllegalArgumentException("Invalid pairing QR. Generate a new Phone inbox pairing code.")
+            throw IllegalArgumentException("Invalid pairing QR. Generate a new shadr pairing code.")
         }
     }
 }
