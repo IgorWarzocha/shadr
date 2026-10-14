@@ -20,7 +20,7 @@ class ConnectionAttempt(val settings: ConnectionSettings) {
             settings.validate()
             check(settings)
         } catch (_: IllegalArgumentException) {
-            ConnectionResult(false, "These details don't look right. Try a new QR code or check the server address.")
+            ConnectionResult(false, "These details don't look right. Try a new QR code or check the inbox address.")
         } catch (_: java.io.IOException) {
             ConnectionResult(false, transportFailureMessage())
         } catch (_: Exception) {

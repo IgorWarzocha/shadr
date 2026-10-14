@@ -73,7 +73,7 @@ class PostWorker(context: Context, params: WorkerParameters) : Worker(context, p
                 exchange.send(session)
                 exchange.finishPending(session)
                 if (store.ifCurrent(session) {} && store.outcomes().length() > 0) exchange.send(session)
-                if (command) CommandNotice.show(applicationContext, if (store.paused) "Bot clearing is paused" else "Bot request processed")
+                if (command) CommandNotice.show(applicationContext, if (store.paused) "Assistant clearing is paused" else "Assistant request processed")
                 Result.success()
             } catch (_: Exception) {
                 if (!isStopped) store.ifCurrent(session) { store.postFailed() }

@@ -5,8 +5,8 @@ One phone owns the shade. Every request needs `Authorization: Bearer TOKEN`. Clo
 | Route | Token | Purpose |
 | --- | --- | --- |
 | `POST /notifications` | Phone | Replace the snapshot and receive dismissal commands |
-| `GET /notifications` | Bot | Read the latest valid shade, pending requests and dismissal log |
-| `POST /dismiss` | Bot | Queue currently present notification keys |
+| `GET /notifications` | Assistant | Read the latest valid shade, pending requests and dismissal log |
+| `POST /dismiss` | Assistant | Queue currently present notification keys |
 | `GET /health` | Either | Read concise status and phone protocol metadata |
 
 There is no export endpoint or general notification history.
@@ -40,7 +40,7 @@ Timestamps are ISO 8601. `lastListenerAt` is the last successful contact with th
 
 `notificationAccessGranted` reports the actual Android notification-access permission, independently of listener binding. Older phones may omit it, which means unknown, not revoked. A bound listener cannot report permission false.
 
-Optional `pushToken` registers the phone's current FCM token. It is either a non-whitespace printable ASCII string of 1 to 4,096 characters or null. Null clears registration, while omission preserves it for older clients. It is never returned to bots. The phone clears registration when push setup or permission to show its operational notification is unavailable.
+Optional `pushToken` registers the phone's current FCM token. It is either a non-whitespace printable ASCII string of 1 to 4,096 characters or null. Null clears registration, while omission preserves it for older clients. It is never returned to assistants. The phone clears registration when push setup or permission to show its operational notification is unavailable.
 
 An unbound post updates the current phone health and sequence but does not replace the latest valid shade or its capture and receipt timestamps. A bound empty array really does mean an empty shade.
 
@@ -54,7 +54,7 @@ At most 1,000 notifications and 1,000 outcomes fit in one request. Notification 
 
 Outcome statuses are `applied`, `failed` and `not_found`. Persist the request ID with the command and echo it in the outcome. Retain outcomes until a successful post acknowledges them. If a response is lost, resend them with a fresh sequence. The relay records each matching request's first accepted outcome once. Unknown or expired request IDs do not create results. An old acknowledgement cannot consume a replacement request for a reused Android key. Older clients' `dismissed`, `protected` and `missing` statuses are normalised to `applied`, `failed` and `not_found` respectively.
 
-Report `applied` only after observing the requested notification disappear following cancellation. Report `failed` when cancellation cannot be confirmed within the phone's bounded attempt, and `not_found` when the requested notification is already absent. Pausing bot clearing leaves the request pending, not successfully dismissed.
+Report `applied` only after observing the requested notification disappear following cancellation. Report `failed` when cancellation cannot be confirmed within the phone's bounded attempt, and `not_found` when the requested notification is already absent. Pausing assistant clearing leaves the request pending, not successfully dismissed.
 
 For a live request, the POST response is:
 
@@ -69,7 +69,7 @@ For a live request, the POST response is:
 
 Only `dismiss` contains executable commands. Each command has a distinct opaque ID in `requestIds`. Refuse a command without its ID. `wouldDismiss` is informational and must never cancel anything. Pending commands retain their IDs across delivery retries.
 
-The server delivers commands immediately, without a commissioning hold, package restrictions or a server opt-out. The phone's **Pause bot clearing** control pauses cancellation. An unbound post never receives executable commands. Previously queued dry-run requests now deliver with their original request IDs, without requeueing. Historical receipts keep their original flags, but newly confirmed results use `dryRun: 0`.
+The server delivers commands immediately, without a commissioning hold, package restrictions or a server opt-out. The phone's **Pause assistant clearing** control pauses cancellation. An unbound post never receives executable commands. Previously queued dry-run requests now deliver with their original request IDs, without requeueing. Historical receipts keep their original flags, but newly confirmed results use `dryRun: 0`.
 
 ## Queue dismissals
 
@@ -107,7 +107,7 @@ Start with `GET /notifications?view=compact&limit=50&offset=0`. It returns `noti
 
 For one item's full body and correlated records, use `GET /notifications?key=URL_ENCODED_EXACT_KEY`. This returns the full shape below, filtered on the server. Do not combine `key` with compact or pagination options. Invalid views, repeated recognised parameters and invalid combinations return 400.
 
-Bare `GET /notifications` downloads the full shade and seven days of receipts. Avoid it for routine bot reads. Its fields are:
+Bare `GET /notifications` downloads the full shade and seven days of receipts. Avoid it for routine assistant reads. Its fields are:
 
 - `notifications`: the latest valid bound snapshot's notification array, without per-item history or inferred ages.
 - `capturedAt`: that snapshot's phone capture timestamp, or null before a valid snapshot.

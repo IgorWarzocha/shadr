@@ -36,6 +36,8 @@ class SetupActivity : AppCompatActivity() {
     private var queuedAt = 0L
     private var connectDraft: ((ConnectionSettings, () -> Boolean) -> Unit)? = null
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        PushRegistration.refresh(this)
+        Posting.schedule(this)
         if (screen == "background") show("background")
     }
     private val scanPairing = registerForActivityResult(ScanContract()) { result ->
@@ -125,10 +127,10 @@ class SetupActivity : AppCompatActivity() {
             "connect" -> connect()
             "allow" -> {
                 title("Allow notification access")
-                text("Phone inbox needs access to send your notifications to your inbox.")
+                text("Allow access so your assistant can read and clear notifications.")
                 button("Allow notification access", R.id.allow_access) { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
                 if (SetupFlow.restrictedSettingsHelp(android.os.Build.VERSION.SDK_INT, notificationAccess())) {
-                    text("If Android says 'App was denied access', open Settings > Apps > Phone inbox > ⋮ > Allow restricted settings. Then enable notification access.")
+                    text("If Android says 'App was denied access':\n1. Tap Open app settings.\n2. Open the three-dot menu and tap Allow restricted settings.\n3. Return here and allow notification access.")
                     button("Open app settings", R.id.open_app_settings) {
                         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:$packageName")))
                     }
@@ -136,14 +138,14 @@ class SetupActivity : AppCompatActivity() {
                 text("Return here after allowing access.")
             }
             "background" -> backgroundSetup()
-            "done" -> { title("You're ready"); text("Notifications will send in the background. ${clearingStatus()}"); button("Open Phone inbox", R.id.continue_setup) { show("main") } }
+            "done" -> { title("You're ready"); text("Notifications are sent in the background. ${clearingStatus()}"); button("Open Phone inbox", R.id.continue_setup) { show("main") } }
             "main" -> main()
-            "settings" -> { title("Settings"); button("Connection", R.id.edit_connection) { show("connect") }; button("Bot request setup", R.id.background_settings) { show("background") }; button("Back", R.id.back) { show("main") } }
+            "settings" -> { title("Settings"); button("Connection", R.id.edit_connection) { show("connect") }; button("Assistant clearing", R.id.background_settings) { show("background") }; button("Back", R.id.back) { show("main") } }
         }
     }
     private fun connect() {
         title("Connect your inbox")
-        text("Scan the QR code from your inbox to connect.")
+        text("Scan the QR code from your assistant to connect.")
         val scan = button("Scan QR", R.id.scan_pairing) {
             generation++
             scanPairing.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE)
@@ -170,8 +172,8 @@ class SetupActivity : AppCompatActivity() {
         body.addView(manual)
         val parent = body; body = manual
         val (savedAddress, savedToken) = ConnectionDraft.manualPrefill(store.connection)
-        val endpoint = field("Server address", savedAddress, R.id.endpoint)
-        val token = field("Phone token", savedToken, R.id.phone_token, true)
+        val endpoint = field("Inbox address", savedAddress, R.id.endpoint)
+        val token = field("Pairing code", savedToken, R.id.phone_token, true)
         val connect = button("Connect", R.id.test_connection) {
             val draft = ConnectionDraft.manual(endpoint.text.toString(), token.text.toString(), store.connection, store.zone)
             connectDraft?.invoke(draft) {
@@ -221,9 +223,10 @@ class SetupActivity : AppCompatActivity() {
         packageName in NotificationManagerCompat.getEnabledListenerPackages(this), ShadeListener.bound != null
     )
     private fun backgroundSetup() {
-        title("Enable bot requests")
-        text("Allow a brief, silent notification when a bot request is being processed. Phone inbox won't keep a permanent notification or poll while idle.")
-        if (!BackgroundAccess.notificationsEnabled(this)) {
+        title("Let your assistant clear notifications")
+        text("Phone inbox shows a brief, silent notification while your assistant clears notifications.")
+        val notificationsEnabled = BackgroundAccess.notificationsEnabled(this)
+        if (!notificationsEnabled) {
             button("Allow notifications", R.id.allow_service_notifications) {
                 if (android.os.Build.VERSION.SDK_INT >= 33 && androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                     notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
@@ -232,25 +235,24 @@ class SetupActivity : AppCompatActivity() {
                 }
             }
         }
-        if (store.pushConfig == null) text("Push notifications aren't set up for this inbox yet. Finish Firebase setup on your server, then try again.")
-        else if (store.pushRegistrationFailed) text("Couldn't enable bot requests. Check your connection and try again.")
-        else if (!store.pushRegistered) text("Connecting bot requests to this phone…")
-        button("Try again", R.id.retry_push) { PushRegistration.refresh(this); Posting.schedule(this); show("background") }
-        button("Open app settings", R.id.open_app_settings) {
-            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:$packageName")))
+        if (store.pushConfig == null) text("Your inbox isn't ready yet. Ask your assistant to finish setup, then try again.")
+        else if (store.pushRegistrationFailed) text("Couldn't connect to your assistant. Check your internet connection and try again.")
+        else if (notificationsEnabled && !store.pushRegistered) text("Connecting to your assistant")
+        if (notificationsEnabled && !store.pushRegistered) {
+            button("Try again", R.id.retry_push) { PushRegistration.refresh(this); Posting.schedule(this); show("background") }
         }
         button("Back", R.id.back) { show("main") }
     }
-    private fun clearingStatus() = if (store.paused) "Bot clearing is paused. Notifications still send." else "Bots can clear your notifications."
+    private fun clearingStatus() = if (store.paused) "Clearing is paused. Notifications are still sent." else "Your assistant can clear your notifications."
     private fun statusText(): String {
         val posted = if (store.lastPost == 0L) "Not yet" else java.time.format.DateTimeFormatter.ofPattern("MMM d, HH:mm").withZone(java.time.ZoneId.systemDefault()).format(Instant.ofEpochMilli(store.lastPost))
         val connection = when {
-            notificationAccess() == NotificationAccess.REQUIRED -> "Notification access needed\nAllow access to send your notifications."
-            !BackgroundAccess.notificationsEnabled(this) -> "Notifications need to be enabled\nEnable bot requests to finish setup."
-            !store.pushRegistered -> "Bot requests aren't ready\nOpen bot request setup to finish connecting."
+            notificationAccess() == NotificationAccess.REQUIRED -> "Notification access needed\nAllow access to share notifications with your assistant."
+            !BackgroundAccess.notificationsEnabled(this) -> "Allow Phone inbox notifications\nOpen Assistant clearing to finish setup."
+            !store.pushRegistered -> "Your assistant isn't connected yet\nOpen Assistant clearing to finish setup."
             notificationAccess() == NotificationAccess.WAITING_FOR_LISTENER -> "Starting notification access\nKeep notification access enabled."
             store.postState == PostState.FAILED -> "Connection problem\nCheck your network. We'll retry."
-            else -> "Connected\nNotifications send in the background."
+            else -> "Connected\nNotifications are sent in the background."
         }
         return "$connection\n\nLast sent: $posted\n${clearingStatus()}"
     }
@@ -258,8 +260,8 @@ class SetupActivity : AppCompatActivity() {
         title("Phone inbox")
         text(statusText()).id = R.id.status
         val message = feedback()
-        button("Send now", R.id.post_now) { queuedAt = System.currentTimeMillis(); Posting.schedule(this); message.visibility = View.VISIBLE; message.text = "Sending to your inbox…" }
-        val pause = MaterialSwitch(this).apply { id = R.id.pause_clearing; text = "Pause bot clearing"; isChecked = store.paused }
+        button("Send latest notifications to your assistant", R.id.post_now) { queuedAt = System.currentTimeMillis(); Posting.schedule(this); message.visibility = View.VISIBLE; message.text = "Sending notifications to your assistant" }
+        val pause = MaterialSwitch(this).apply { id = R.id.pause_clearing; text = "Pause assistant clearing"; isChecked = store.paused }
         body.addView(pause)
         pause.setOnCheckedChangeListener { _, checked ->
             try {
@@ -269,7 +271,7 @@ class SetupActivity : AppCompatActivity() {
             } catch (_: Exception) { show("main"); pairingMessage("Couldn't save your choice. Please try again.") }
         }
         button("Allow notification access", R.id.allow_access) { show("allow") }.visibility = if (notificationAccess() == NotificationAccess.REQUIRED) View.VISIBLE else View.GONE
-        button("Bot request setup", R.id.background_settings) { show("background") }.visibility = if (!BackgroundAccess.ready(this)) View.VISIBLE else View.GONE
+        button("Assistant clearing", R.id.background_settings) { show("background") }.visibility = if (!BackgroundAccess.ready(this)) View.VISIBLE else View.GONE
         button("Settings", R.id.settings) { show("settings") }
     }
     private fun title(value: String) { text(value, 28f) }
